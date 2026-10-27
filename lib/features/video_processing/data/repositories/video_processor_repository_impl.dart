@@ -55,9 +55,18 @@ class VideoProcessorRepositoryImpl implements VideoProcessorRepository {
       );
 
       if (result == null) {
+        // Surface FFmpeg's own log: the generic "no output" message hid the
+        // actual encoder/concat error and made Preview/Export failures
+        // impossible to diagnose on a phone.
+        final log = _cuttingService.lastErrorLog?.trim();
+        final detail = (log == null || log.isEmpty)
+            ? null
+            : (log.length > 800 ? log.substring(log.length - 800) : log);
         return AppError(
-          const VideoProcessingFailure(
-            message: 'FFmpeg processing returned no output',
+          VideoProcessingFailure(
+            message: detail == null
+                ? 'FFmpeg processing returned no output'
+                : 'FFmpeg processing failed: $detail',
           ),
         );
       }

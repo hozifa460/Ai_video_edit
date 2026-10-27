@@ -17,6 +17,13 @@ import 'ffmpeg_smart_zoom_service.dart';
 class FfmpegCuttingService {
   final FfmpegSmartZoomService _smartZoomService = FfmpegSmartZoomService();
 
+  /// FFmpeg's own log of the last failed session.
+  ///
+  /// Surfaced through `VideoProcessingFailure` so a failed Preview/Export
+  /// reports the real encoder/concat error instead of the generic
+  /// "FFmpeg processing returned no output".
+  String? lastErrorLog;
+
   /// Above this many kept ranges the one-shot `filter_complex` graph is
   /// replaced by per-segment files plus the concat demuxer.
   ///
@@ -25,6 +32,30 @@ class FfmpegCuttingService {
   /// grows with the count. The demuxer keeps only one segment in memory at a
   /// time. The limit leaves headroom below the old ASCII-label ceiling of 26.
   static const int kDirectConcatSegmentLimit = 40;
+
+  /// Segment count above which `_concatSegments` goes straight to the
+  /// memory-bounded per-segment fallback instead of building one graph.
+  static const int kDirectFilterGraphSegmentLimit = 30;
+
+  /// Encoder settings shared by every extracted segment, so the concat demuxer
+  /// can stream-copy them without re-encoding.
+  static const String segmentVideoCodecFlags =
+      '-c:v libx264 -preset ultrafast -crf 23';
+
+  /// Last-resort per-segment encoder for sources libx264 cannot handle.
+  static const String segmentFallbackVideoCodecFlags = '-c:v mpeg4 -q:v 5';
+
+  /// Forces even dimensions and a pixel format every segment shares.
+  static const String normalizeVideoFilter =
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p';
+
+  /// Identical sample rate / channel layout for every extracted segment.
+  static const String segmentAudioFlags = '-c:a aac -ar 44100 -ac 2 -b:a 128k';
+
+  void _recordFailure(String context, String? logs) {
+    lastErrorLog = logs;
+    AppLogger().e('$context: $logs');
+  }
 
   /// The kept ranges of [plan], validated for use as cut inputs.
   ///
@@ -135,6 +166,7 @@ class FfmpegCuttingService {
     // policy and decoder priming are unchecked; implicit first-audio-stream
     // selection against the probe's first audio stream is SR-23 (batch D).
     final speechSegments = buildSpeechSegments(plan);
+    lastErrorLog = null;
 
     if (speechSegments.isEmpty) {
       return null;
@@ -197,7 +229,7 @@ class FfmpegCuttingService {
 
     if (!ReturnCode.isSuccess(await session.getReturnCode())) {
       final logs = await session.getAllLogsAsString();
-      AppLogger().e('Single-segment trim failed: $logs');
+      _recordFailure('Single-segment trim failed', logs);
       return null;
     }
     return outputPath;
@@ -205,10 +237,10 @@ class FfmpegCuttingService {
 
   /// Command for trimming exactly one kept range.
   ///
-  /// `-ss`/`-to` are input options, so FFmpeg reads only the requested span
-  /// instead of decoding the whole file and discarding most of it. The optional
-  /// audio map tolerates a source that the probe optimistically reported as
-  /// having audio.
+  /// `-ss` is an input option (fast seek) while `-t` is an **output** duration:
+  /// the pair decodes exactly `end - start` seconds. The previous `-ss ... -to
+  /// ... -i ...` form placed both bounds before the input, which on VFR/B-frame
+  /// phone videos could produce an empty 0-frame segment at the timeline tail.
   String buildSingleSegmentCommand({
     required String videoPath,
     required SilenceSegment segment,
@@ -217,9 +249,12 @@ class FfmpegCuttingService {
     required bool hasAudio,
   }) {
     final qualityFlags = _buildQualityFlags(quality);
-    return '-ss ${_fmt(segment.startSeconds)} '
-        '-to ${_fmt(segment.endSeconds)} -i "$videoPath" '
-        '-c:v libx264 -preset ultrafast $qualityFlags -movflags +faststart -y "$outputPath"';
+    final duration = segment.endSeconds - segment.startSeconds;
+    return '-ss ${_fmt(segment.startSeconds)} -i "$videoPath" '
+        '-t ${_fmt(duration > 0 ? duration : 0)} '
+        '-vf "$normalizeVideoFilter" '
+        '$segmentVideoCodecFlags ${hasAudio ? qualityFlags : '-an'} '
+        '-movflags +faststart -y "$outputPath"';
   }
 
   /// Builds the one-shot `filter_complex` graph for the direct cut.
@@ -227,6 +262,10 @@ class FfmpegCuttingService {
   /// Labels are numeric (`[v0]`, `[a0]`, `[v26]`, ...). The previous
   /// `String.fromCharCode(97 + i)` produced `{`, `|`, `}` for segments 26+,
   /// which FFmpeg rejects as invalid labels.
+  ///
+  /// Every branch is normalised to the same pixel format, even dimensions,
+  /// sample rate and channel layout: `concat` requires matching inputs, and a
+  /// single odd-width or mono segment otherwise fails the whole graph.
   String buildConcatFilterGraph({
     required List<SilenceSegment> speechSegments,
     required bool hasAudio,
@@ -243,13 +282,16 @@ class FfmpegCuttingService {
 
       final zoomFilter = _smartZoomService.buildZoomFilter(i, zoom);
       final vFilter = zoomFilter != null
-          ? 'trim=start=${_fmt(start)}:end=${_fmt(end)},setpts=PTS-STARTPTS,$zoomFilter'
-          : 'trim=start=${_fmt(start)}:end=${_fmt(end)},setpts=PTS-STARTPTS';
+          ? 'trim=start=${_fmt(start)}:end=${_fmt(end)},setpts=PTS-STARTPTS,'
+                '$zoomFilter,format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2'
+          : 'trim=start=${_fmt(start)}:end=${_fmt(end)},setpts=PTS-STARTPTS,'
+                'format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2';
 
       if (hasAudio) {
         filterParts.add(
           '[0:v]$vFilter[v$i];'
-          '[0:a]atrim=start=${_fmt(start)}:end=${_fmt(end)},asetpts=PTS-STARTPTS[a$i]',
+          '[0:a]atrim=start=${_fmt(start)}:end=${_fmt(end)},asetpts=PTS-STARTPTS,'
+          'aformat=sample_rates=44100:channel_layouts=stereo[a$i]',
         );
         inputLabels.add('[v$i][a$i]');
       } else {
@@ -346,7 +388,11 @@ class FfmpegCuttingService {
     SmartZoomConfig? smartZoom,
     void Function(double, String)? onProgress,
   }) async {
-    if (shouldUseDemuxerFallback(speechSegments.length, smartZoom)) {
+    // trim/atrim + concat with numeric labels handles variable-frame-rate phone
+    // videos without the `setpts=N/FRAME_RATE/TB` NaN that the select/aselect
+    // single pass can hit, so it is the primary path for any reasonable count.
+    if (speechSegments.length > kDirectFilterGraphSegmentLimit ||
+        shouldUseDemuxerFallback(speechSegments.length, smartZoom)) {
       AppLogger().i(
         'Large cut (${speechSegments.length} segments); using concat demuxer '
         'to avoid a monolithic filtergraph',
@@ -364,29 +410,18 @@ class FfmpegCuttingService {
 
     final hasAudio = await hasAudioStream(videoPath);
 
-    String command;
-    if (!smartZoomIsActive(smartZoom)) {
-      command = buildSelectCommand(
-        videoPath: videoPath,
-        speechSegments: speechSegments,
-        outputPath: outputPath,
-        quality: quality,
-        hasAudio: hasAudio,
-      );
-    } else {
-      final filterComplex = buildConcatFilterGraph(
-        speechSegments: speechSegments,
-        hasAudio: hasAudio,
-        smartZoom: smartZoom,
-      );
-      command = buildDirectConcatCommand(
-        videoPath: videoPath,
-        filterComplex: filterComplex,
-        outputPath: outputPath,
-        quality: quality,
-        hasAudio: hasAudio,
-      );
-    }
+    final filterComplex = buildConcatFilterGraph(
+      speechSegments: speechSegments,
+      hasAudio: hasAudio,
+      smartZoom: smartZoom,
+    );
+    final command = buildDirectConcatCommand(
+      videoPath: videoPath,
+      filterComplex: filterComplex,
+      outputPath: outputPath,
+      quality: quality,
+      hasAudio: hasAudio,
+    );
 
     AppLogger().i('Concat command: $command');
     final session = await _executeWithProgress(
@@ -398,7 +433,7 @@ class FfmpegCuttingService {
 
     if (!ReturnCode.isSuccess(await session.getReturnCode())) {
       final logs = await session.getAllLogsAsString();
-      AppLogger().e('Concat failed, using segment demuxer fallback: $logs');
+      _recordFailure('Direct concat failed, trying segment fallback', logs);
       return _fallbackReencode(
         videoPath: videoPath,
         speechSegments: speechSegments,
@@ -455,15 +490,36 @@ class FfmpegCuttingService {
         );
 
         AppLogger().i('Fallback segment $i/$total: $command');
-        final session = await FFmpegKit.execute(command);
+        var session = await FFmpegKit.execute(command);
         if (!ReturnCode.isSuccess(await session.getReturnCode())) {
           final logs = await session.getAllLogsAsString();
-          AppLogger().e('Fallback segment $i failed: $logs');
-          return null;
+          AppLogger().e('Fallback segment $i failed with libx264: $logs');
+
+          // Some sources (odd dimensions, unsupported pix_fmt, broken headers)
+          // defeat libx264 but still decode fine. Retry the same range with the
+          // mpeg4 encoder before abandoning the whole cut.
+          final retryCommand = command.replaceFirst(
+            segmentVideoCodecFlags,
+            segmentFallbackVideoCodecFlags,
+          );
+          if (retryCommand == command) {
+            _recordFailure('Fallback segment $i failed', logs);
+            return null;
+          }
+          AppLogger().i('Fallback segment $i retry: $retryCommand');
+          session = await FFmpegKit.execute(retryCommand);
+          if (!ReturnCode.isSuccess(await session.getReturnCode())) {
+            final retryLogs = await session.getAllLogsAsString();
+            _recordFailure('Fallback segment $i failed', retryLogs);
+            return null;
+          }
         }
 
         if (!await File(segmentPath).exists()) {
-          AppLogger().e('Fallback segment $i was not created');
+          _recordFailure(
+            'Fallback segment $i was not created',
+            lastErrorLog,
+          );
           return null;
         }
 
@@ -496,11 +552,36 @@ class FfmpegCuttingService {
 
       if (!ReturnCode.isSuccess(await session.getReturnCode())) {
         final logs = await session.getAllLogsAsString();
-        AppLogger().e('Fallback concat failed: $logs');
-        return null;
+        AppLogger().e('Fallback concat stream copy failed: $logs');
+
+        // Stream copy needs perfectly matching codec parameters. When the
+        // demuxer rejects them, re-encode the joined stream instead of giving
+        // up — this is the last step before reporting a real failure.
+        final reencodeCommand = buildConcatDemuxerCommand(
+          listPath: listPath,
+          outputPath: outputPath,
+          quality: quality,
+          hasAudio: hasAudio,
+          reencode: true,
+        );
+        AppLogger().i('Fallback concat re-encode: $reencodeCommand');
+        session = await _executeWithProgress(
+          command: reencodeCommand,
+          outputDurationMs: outputDurationMs,
+          onProgress: (progress, message) {
+            onProgress?.call(0.8 + progress * 0.2, message);
+          },
+          statusMessage: 'Joining segments...',
+        );
+        if (!ReturnCode.isSuccess(await session.getReturnCode())) {
+          final reencodeLogs = await session.getAllLogsAsString();
+          _recordFailure('Fallback concat failed', reencodeLogs);
+          return null;
+        }
       }
       return outputPath;
     } catch (e, stack) {
+      lastErrorLog = e.toString();
       AppLogger().e('Segment-concat fallback failed', e, stack);
       return null;
     } finally {
@@ -516,10 +597,12 @@ class FfmpegCuttingService {
 
   /// Command that writes one kept range to a temporary MP4 for concat.
   ///
-  /// Every segment uses the same video/audio encoder settings and `setsar=1`
-  /// so the demuxer can stream-copy the joined result. Smart Zoom, when
-  /// enabled, is applied here; its scale+crop pair returns the original frame
-  /// dimensions, keeping the concat inputs compatible.
+  /// `-ss` seeks before the input and `-t` limits the **output** duration, so
+  /// VFR/B-frame sources cannot yield an empty 0-frame segment the way the old
+  /// `-ss ... -to ... -i ...` pair could. Every segment is normalised to even
+  /// dimensions, yuv420p and identical audio parameters, which is what lets the
+  /// concat demuxer stream-copy the joined result. Smart Zoom, when enabled, is
+  /// prepended to that same filter chain.
   String buildSegmentExtractionCommand({
     required String videoPath,
     required SilenceSegment segment,
@@ -533,11 +616,17 @@ class FfmpegCuttingService {
     final zoomFilter = smartZoomIsActive(smartZoom)
         ? _smartZoomService.buildZoomFilter(segmentIndex, zoom)
         : null;
-    final audioFlags = hasAudio ? _buildQualityFlags(quality) : '-an';
-    final videoFilter = zoomFilter != null ? ' -vf "$zoomFilter"' : '';
-    return '-ss ${_fmt(segment.startSeconds)} '
-        '-to ${_fmt(segment.endSeconds)} -i "$videoPath"$videoFilter '
-        '-c:v libx264 -preset ultrafast $audioFlags -y "$segmentPath"';
+    final videoFilter = zoomFilter != null
+        ? '$zoomFilter,$normalizeVideoFilter'
+        : normalizeVideoFilter;
+    // Fixed audio settings on purpose: per-segment bitrates would differ per
+    // export quality and break the demuxer's stream copy.
+    final audioFlags = hasAudio ? segmentAudioFlags : '-an';
+    final duration = segment.endSeconds - segment.startSeconds;
+    return '-ss ${_fmt(segment.startSeconds)} -i "$videoPath" '
+        '-t ${_fmt(duration > 0 ? duration : 0)} '
+        '-vf "$videoFilter" '
+        '$segmentVideoCodecFlags $audioFlags -y "$segmentPath"';
   }
 
   /// The concat demuxer manifest. Paths use forward slashes and escaped
@@ -627,7 +716,7 @@ class FfmpegCuttingService {
 
     if (!ReturnCode.isSuccess(await session.getReturnCode())) {
       final logs = await session.getAllLogsAsString();
-      AppLogger().e('Export failed: $logs');
+      _recordFailure('Export failed', logs);
       return null;
     }
     return outputPath;

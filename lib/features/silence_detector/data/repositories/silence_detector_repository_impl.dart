@@ -80,6 +80,7 @@ class SilenceDetectorRepositoryImpl implements SilenceDetectorRepository {
         segments = _breathingService.protect(
           segments,
           minSilenceDuration: params.minSilenceDuration,
+          totalDuration: windowEnd,
         );
         segments = IntervalAlgebra.normalize(
           segments,
@@ -131,6 +132,10 @@ class SilenceDetectorRepositoryImpl implements SilenceDetectorRepository {
   /// discarded because binary64 stores it as 49.99999999999999ms.
   static const double _durationComparisonEpsilon = 1e-9;
 
+  /// A silence bound this close to a timeline edge is treated as **on** the
+  /// edge: there is no neighbouring speech to protect there.
+  static const double kTimelineBoundarySeconds = 0.05;
+
   /// Shrinks every silence segment by the requested speech guards.
   ///
   /// [paddingBefore] and [paddingAfter] are **protected space inside** the
@@ -161,10 +166,22 @@ class SilenceDetectorRepositoryImpl implements SilenceDetectorRepository {
     for (final segment in segments) {
       if (!segment.isValid) continue;
 
-      final start = (segment.startSeconds + before)
-          .clamp(0.0, bound)
-          .toDouble();
-      final end = (segment.endSeconds - after).clamp(0.0, bound).toDouble();
+      // Guards protect *neighbouring speech*. A silence that already touches
+      // `t=0` or the end of the window has no speech on that side, so applying
+      // the guard there would only invent an 80-160ms "speech" sliver at the
+      // boundary — a range the video stream may not even contain a frame in.
+      final start =
+          (segment.startSeconds > kTimelineBoundarySeconds
+                  ? segment.startSeconds + before
+                  : 0.0)
+              .clamp(0.0, bound)
+              .toDouble();
+      final end =
+          (segment.endSeconds < bound - kTimelineBoundarySeconds
+                  ? segment.endSeconds - after
+                  : bound)
+              .clamp(0.0, bound)
+              .toDouble();
 
       if (end <= start) continue;
       if (hasGuard &&

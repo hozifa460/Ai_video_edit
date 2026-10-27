@@ -40,11 +40,20 @@ class BreathingProtectionService {
   /// is not treated as 149.99999999999997ms by binary64.
   static const double _durationComparisonEpsilon = 1e-9;
 
+  /// A pause ending this close to the timeline end has no following speech, so
+  /// no breath needs protecting there.
+  static const double timelineBoundarySeconds = 0.05;
+
   List<SilenceSegment> protect(
     List<SilenceSegment> segments, {
     double minSilenceDuration = 0.25,
+    double? totalDuration,
   }) {
     if (segments.isEmpty) return segments;
+
+    final bound = totalDuration == null
+        ? null
+        : IntervalAlgebra.nonNegativeOrZero(totalDuration);
 
     final result = <SilenceSegment>[];
 
@@ -57,9 +66,17 @@ class BreathingProtectionService {
         continue;
       }
 
+      // Trailing silence runs to the end of the recording: pulling its tail
+      // back would only leave a fake speech sliver with no frames in it.
+      final touchesTimelineEnd =
+          bound != null &&
+          bound > 0 &&
+          segment.endSeconds >= bound - timelineBoundarySeconds;
+
       // For valid silence segments longer than 0.25s, pull back endSeconds by
       // 0.08s so the breath intake right before speech starts is preserved.
-      if (duration > 0.25 + _durationComparisonEpsilon) {
+      if (duration > 0.25 + _durationComparisonEpsilon &&
+          !touchesTimelineEnd) {
         final end = segment.endSeconds - 0.08;
         if (end > segment.startSeconds) {
           result.add(

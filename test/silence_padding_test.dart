@@ -105,9 +105,35 @@ void main() {
         totalDuration: 0.2,
       );
 
+      // Both bounds touch the timeline edges, so no guard is applied on either
+      // side: there is no neighbouring speech to protect.
       expect(result, const [
-        SilenceSegment(startSeconds: 0.1, endSeconds: 0.2),
+        SilenceSegment(startSeconds: 0, endSeconds: 0.2),
       ]);
+    });
+
+    test('a silence starting at t=0 is not padded away from the origin', () {
+      final result = repository.applyPadding(
+        const [SilenceSegment(startSeconds: 0, endSeconds: 1)],
+        paddingBefore: 0.08,
+        paddingAfter: 0.08,
+        totalDuration: 10,
+      );
+
+      expect(result.single.startSeconds, 0);
+      expect(result.single.endSeconds, closeTo(0.92, 1e-9));
+    });
+
+    test('a silence ending at the window end keeps the boundary as its end', () {
+      final result = repository.applyPadding(
+        const [SilenceSegment(startSeconds: 9, endSeconds: 10)],
+        paddingBefore: 0.08,
+        paddingAfter: 0.08,
+        totalDuration: 10,
+      );
+
+      expect(result.single.startSeconds, closeTo(9.08, 1e-9));
+      expect(result.single.endSeconds, 10);
     });
 
     test('invalid bounds never enter the padded result', () {
@@ -155,6 +181,18 @@ void main() {
       ]);
       expect(protected, const [
         SilenceSegment(startSeconds: 1, endSeconds: 2.92),
+      ]);
+    });
+
+    test('a pause ending at the timeline end is not pulled back', () {
+      final protected = BreathingProtectionService().protect(
+        const [SilenceSegment(startSeconds: 1, endSeconds: 3)],
+        totalDuration: 3,
+      );
+      // No speech follows, so no breath margin: a pullback here would only
+      // invent a 80ms speech sliver with no frames in it.
+      expect(protected, const [
+        SilenceSegment(startSeconds: 1, endSeconds: 3),
       ]);
     });
   });

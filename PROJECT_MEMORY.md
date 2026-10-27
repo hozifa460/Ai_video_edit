@@ -480,3 +480,20 @@ Android يستخدم Java/Kotlin target 17، SDK versions موروثة من Flut
 - Checks run: flutter analyze --no-pub (No issues found), flutter test --no-pub (349 tests passed), flutter build apk --release --no-shrink flag verified accepted by Flutter 3.38.3 (unknown flags error immediately; this one does not).
 - Limitations: No Gradle/APK build and no device install tested here; native Release import still needs a device check.
 - Status: Implemented - awaiting review.
+
+### 2026-10-27 (3) - OpenCode - Boundary slivers + hardened FFmpeg cutting pipeline
+
+- Scope: silence_detector (applyPadding, breathing protection, IntervalAlgebra.complement), video_processing (FfmpegCuttingService, VideoProcessorRepositoryImpl), tests.
+- Changes:
+  - applyPadding no longer applies paddingBefore when the silence starts within 50ms of t=0 (start stays 0) nor paddingAfter when it ends within 50ms of the window end (end stays at the bound); guards protect neighbouring speech, which does not exist at a timeline edge.
+  - BreathingProtectionService.protect gained optional totalDuration; the 80ms breath pullback is skipped for a pause that reaches the timeline end. Repository passes the detection window end.
+  - IntervalAlgebra.complement drops kept slivers shorter than 120ms ONLY at the two timeline boundaries (and never when it is the only kept range). Interior speech islands are still preserved at every size - the requested "any sliver" filter was deliberately narrowed to boundaries because filtering interior islands would delete real speech and break the SR-01/B01-R2 gap-preservation regressions (1/10/19/20/21ms island tests).
+  - SilenceRemovalPlan doc updated: kept is the complement minus boundary slivers; removed+kept==total now holds up to those slivers.
+  - FfmpegCuttingService: new lastErrorLog field recorded on every failed session; processVideo now returns "FFmpeg processing failed: <log tail>" instead of only the generic no-output message.
+  - _concatSegments uses trim/atrim + concat filtergraph (numeric labels) as the primary path up to 30 segments (VFR-safe, no FRAME_RATE NaN) and falls back to per-segment demuxer on failure or above the limit; shouldUseDemuxerFallback kept unchanged for API/test compatibility.
+  - buildConcatFilterGraph normalises every branch: format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2 and aformat=sample_rates=44100:channel_layouts=stereo.
+  - buildSingleSegmentCommand and buildSegmentExtractionCommand now use input -ss plus output -t duration (no more -to before -i), add the scale/format normalisation filter, and encode with libx264 ultrafast crf 23; segment audio is fixed at aac 44100Hz stereo 128k (or -an).
+  - _fallbackReencode retries a failed segment with mpeg4 -q:v 5, and if concat stream copy fails it retries with reencode: true before giving up.
+- Checks run: flutter analyze --no-pub = No issues found; flutter test --no-pub = 358 passed; flutter test --no-pub docs/reviews/repro = 33 passed / 8 failed, all 8 pre-existing characterizations (7 B1 acceptance findings + codex_sr06_acceptance expecting the removed second silencedetect pass), none introduced by this batch.
+- Limitations: no device, no real media encode, no A/V measurement; command strings verified only.
+- Status: Implemented - awaiting review.

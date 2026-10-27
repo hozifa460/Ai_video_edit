@@ -56,6 +56,25 @@ void main() {
       expect(graph.contains('}'), isFalse);
     });
 
+    test('every branch shares pixel format, dimensions and audio layout', () {
+      final graph = service.buildConcatFilterGraph(
+        speechSegments: const [
+          SilenceSegment(startSeconds: 0, endSeconds: 1),
+          SilenceSegment(startSeconds: 2, endSeconds: 3),
+        ],
+        hasAudio: true,
+      );
+
+      expect(
+        graph,
+        contains('format=yuv420p,scale=trunc(iw/2)*2:trunc(ih/2)*2'),
+      );
+      expect(
+        graph,
+        contains('aformat=sample_rates=44100:channel_layouts=stereo'),
+      );
+    });
+
     test('video-only graphs do not reference an audio stream', () {
       final graph = service.buildConcatFilterGraph(
         speechSegments: const [
@@ -73,7 +92,7 @@ void main() {
   });
 
   group('single kept range is actually trimmed', () {
-    test('start/end become input -ss/-to and video is re-encoded', () {
+    test('start/end become input -ss plus output -t and video is re-encoded', () {
       final command = service.buildSingleSegmentCommand(
         videoPath: 'input.mp4',
         segment: const SilenceSegment(startSeconds: 1.25, endSeconds: 3.75),
@@ -82,10 +101,13 @@ void main() {
         hasAudio: true,
       );
 
-      expect(command, contains('-ss 1.250'));
-      expect(command, contains('-to 3.750'));
-      expect(command, contains('-i "input.mp4"'));
-      expect(command, contains('-c:v libx264'));
+      expect(command, contains('-ss 1.250 -i "input.mp4"'));
+      // Output duration, not an input -to: VFR/B-frame sources must not yield
+      // a 0-frame segment.
+      expect(command, contains('-t 2.500'));
+      expect(command, contains('-c:v libx264 -preset ultrafast -crf 23'));
+      expect(command, contains('scale=trunc(iw/2)*2:trunc(ih/2)*2'));
+      expect(command, contains('format=yuv420p'));
       expect(command, contains('-c:a aac -b:a 192k'));
       expect(command, isNot(contains('-c:v copy')));
     });
@@ -163,9 +185,12 @@ void main() {
         quality: ExportQuality.medium,
         hasAudio: true,
       );
-      expect(plain, contains('-ss 1.000'));
-      expect(plain, contains('-to 2.000'));
-      expect(plain, contains('-c:v libx264 -preset ultrafast -c:a aac'));
+      expect(plain, contains('-ss 1.000 -i "input.mp4"'));
+      expect(plain, contains('-t 1.000'));
+      expect(plain, contains('-c:v libx264 -preset ultrafast -crf 23'));
+      expect(plain, contains('-c:a aac -ar 44100 -ac 2 -b:a 128k'));
+      expect(plain, contains('scale=trunc(iw/2)*2:trunc(ih/2)*2'));
+      expect(plain, contains('format=yuv420p'));
 
       final zoomed = service.buildSegmentExtractionCommand(
         videoPath: 'input.mp4',
@@ -176,7 +201,21 @@ void main() {
         smartZoom: const SmartZoomConfig(enabled: true),
         segmentIndex: 0,
       );
-      expect(zoomed, contains('-c:v libx264 -preset ultrafast -c:a aac'));
+      expect(zoomed, contains('-c:v libx264 -preset ultrafast -crf 23'));
+      expect(zoomed, contains('-c:a aac -ar 44100 -ac 2 -b:a 128k'));
+      expect(zoomed, contains('format=yuv420p'));
+    });
+
+    test('a video without audio extracts with -an', () {
+      final command = service.buildSegmentExtractionCommand(
+        videoPath: 'input.mp4',
+        segment: const SilenceSegment(startSeconds: 0, endSeconds: 1),
+        segmentPath: 'segment_0.mp4',
+        quality: ExportQuality.medium,
+        hasAudio: false,
+      );
+      expect(command, contains('-an'));
+      expect(command, isNot(contains('-c:a aac')));
     });
   });
 }

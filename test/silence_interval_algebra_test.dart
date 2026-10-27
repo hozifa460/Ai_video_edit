@@ -467,6 +467,45 @@ void main() {
       expect(removed, lessThanOrEqualTo(10));
       expect(kept.every((k) => k.durationSeconds > 0), isTrue);
     });
+
+    test('a sub-120ms sliver at t=0 is never sent to the cut', () {
+      final kept = IntervalAlgebra.complement(const [
+        SilenceSegment(startSeconds: 0.08, endSeconds: 2),
+      ], totalDurationSeconds: 10);
+
+      expect(kept, [const SilenceSegment(startSeconds: 2, endSeconds: 10)]);
+    });
+
+    test('a sub-120ms sliver at the timeline end is never sent to the cut', () {
+      final kept = IntervalAlgebra.complement(const [
+        SilenceSegment(startSeconds: 1, endSeconds: 9.92),
+      ], totalDurationSeconds: 10);
+
+      expect(kept, [const SilenceSegment(startSeconds: 0, endSeconds: 1)]);
+    });
+
+    test('a lone kept range survives even when shorter than 120ms', () {
+      final kept = IntervalAlgebra.complement(
+        const [],
+        totalDurationSeconds: 0.1,
+      );
+      expect(kept, [const SilenceSegment(startSeconds: 0, endSeconds: 0.1)]);
+    });
+
+    test('an interior speech island below 120ms is still content', () {
+      final kept = IntervalAlgebra.complement(const [
+        SilenceSegment(startSeconds: 1, endSeconds: 2),
+        SilenceSegment(startSeconds: 2.1, endSeconds: 3),
+      ], totalDurationSeconds: 10);
+
+      expect(
+        kept.any(
+          (k) => k.startSeconds == 2 && (k.endSeconds - 2.1).abs() < 1e-9,
+        ),
+        isTrue,
+        reason: 'only boundary slivers may be dropped, never speech islands',
+      );
+    });
   });
 
   test('segment validity helpers reject non-finite and inverted ranges', () {

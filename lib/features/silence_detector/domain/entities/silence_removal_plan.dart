@@ -11,8 +11,12 @@ import 'silence_segment.dart';
 /// Guarantees, for any input list:
 /// * `removals` is sorted, finite, clamped to `[0, totalDurationSeconds]` and
 ///   pairwise non-overlapping
-/// * `kept` is exactly the complement of `removals` over `[0, totalDurationSeconds]`
-/// * `removedSeconds + keptSeconds == totalDurationSeconds`
+/// * `kept` is the complement of `removals` over `[0, totalDurationSeconds]`,
+///   minus sub-120ms slivers at the two timeline boundaries (see
+///   `IntervalAlgebra.complement`); those slivers are guard margins with no
+///   video frames in them, so they are excluded from the cut as well
+/// * `removedSeconds + keptSeconds == totalDurationSeconds` up to those
+///   boundary slivers (at most 120ms at each edge)
 /// * `0 <= removedSeconds <= totalDurationSeconds` and `removedRatio` is in `[0,1]`
 ///
 /// `totalDurationSeconds` is the **probed video duration**, so a video whose

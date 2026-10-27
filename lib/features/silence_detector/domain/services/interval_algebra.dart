@@ -5,6 +5,16 @@ import '../entities/silence_segment.dart';
 /// parser or a ruler, not content the user asked to delete.
 const double kMinSilenceIntervalSeconds = 0.001;
 
+/// Shortest kept range tolerated **at a timeline boundary**.
+///
+/// A silence that already starts at `0` or ends at `totalDuration` has no
+/// speech on that side, yet the speech guards and the breath margin still carve
+/// 80-160ms out of it. The complement then reports a fake "speech" sliver such
+/// as `[0, 0.08]` or `[total - 0.16, total]`. Phone videos frequently have no
+/// video frame inside their last 100ms, so cutting such a range produces a
+/// 0-frame segment and the concat fails with "no output".
+const double kMinBoundaryKeptSeconds = 0.12;
+
 /// Pure interval algebra for the silence-removal feature.
 ///
 /// Every rule that decides *what gets deleted* funnels through this file, so
@@ -139,7 +149,34 @@ class IntervalAlgebra {
     if (cursor < bound) {
       kept.add(SilenceSegment(startSeconds: cursor, endSeconds: bound));
     }
-    return kept;
+    return _dropBoundarySlivers(kept, bound);
+  }
+
+  /// Removes sub-[kMinBoundaryKeptSeconds] kept slivers that touch `t=0` or
+  /// `t=totalDuration`, unless they are the only kept range.
+  ///
+  /// Only the two outer ranges are eligible: an **interior** gap is real speech
+  /// between two silences and is preserved at every size, including 1ms
+  /// (SR-01/B01-R2). Dropping interior islands to fix a boundary encoding
+  /// problem would delete content the user never asked to remove.
+  static List<SilenceSegment> _dropBoundarySlivers(
+    List<SilenceSegment> kept,
+    double bound,
+  ) {
+    if (kept.length <= 1) return kept;
+
+    final result = <SilenceSegment>[];
+    for (var i = 0; i < kept.length; i++) {
+      final segment = kept[i];
+      final touchesStart = i == 0 && segment.startSeconds <= 0;
+      final touchesEnd = i == kept.length - 1 && segment.endSeconds >= bound;
+      if ((touchesStart || touchesEnd) &&
+          segment.durationSeconds < kMinBoundaryKeptSeconds) {
+        continue;
+      }
+      result.add(segment);
+    }
+    return result;
   }
 
   /// Union length of [input] in seconds.
