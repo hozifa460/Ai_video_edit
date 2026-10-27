@@ -193,9 +193,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ElevatedButton(
             onPressed: () async {
               final uri = Uri.parse(url);
-              if (await canLaunchUrl(uri)) {
+              try {
                 await launchUrl(uri, mode: LaunchMode.externalApplication);
-              }
+              } catch (_) {}
               if (ctx.mounted) Navigator.of(ctx).pop();
             },
             child: const Text('Open'),

@@ -529,9 +529,15 @@ class FfmpegCuttingService {
     SmartZoomConfig? smartZoom,
     int segmentIndex = 0,
   }) {
+    final zoom = smartZoom ?? const SmartZoomConfig();
+    final zoomFilter = smartZoomIsActive(smartZoom)
+        ? _smartZoomService.buildZoomFilter(segmentIndex, zoom)
+        : null;
+    final audioFlags = hasAudio ? _buildQualityFlags(quality) : '-an';
+    final videoFilter = zoomFilter != null ? ' -vf "$zoomFilter"' : '';
     return '-ss ${_fmt(segment.startSeconds)} '
-        '-to ${_fmt(segment.endSeconds)} -i "$videoPath" '
-        '-c:v libx264 -preset ultrafast -c:a aac -y "$segmentPath"';
+        '-to ${_fmt(segment.endSeconds)} -i "$videoPath"$videoFilter '
+        '-c:v libx264 -preset ultrafast $audioFlags -y "$segmentPath"';
   }
 
   /// The concat demuxer manifest. Paths use forward slashes and escaped

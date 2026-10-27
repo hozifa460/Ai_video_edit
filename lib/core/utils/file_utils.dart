@@ -16,13 +16,9 @@ class FileUtils {
       // (scoped storage) — every failure below then falls back gracefully
       // to app documents instead of crashing the export.
       try {
-        final status = await Permission.storage.request();
-        if (status.isGranted || status.isLimited) {
-          baseDir = Directory('/storage/emulated/0/Download');
-        }
-      } catch (_) {
-        baseDir = null;
-      }
+        await Permission.storage.request();
+      } catch (_) {}
+      baseDir = Directory('/storage/emulated/0/Download');
     } else {
       baseDir = await getDownloadsDirectory();
     }
