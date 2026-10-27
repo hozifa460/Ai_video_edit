@@ -1,0 +1,16 @@
+﻿00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart
+00:00 +0: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_revision_offsets_test.dart: B01-R1 follow-up: long pre-roll must retain the measured origin
+00:00 +1: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R3: union accepts a nonempty list with no valid intervals
+00:00 +2: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R3: union accepts a nonempty list with no valid intervals
+00:00 +3: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R3: union accepts a nonempty list with no valid intervals
+00:00 +4: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R2: actual two-pass datasource preserves a positive 10ms gap
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:00 +5: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R3: datasource ignores zero-length log pairs without throwing
+00:00 +6: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R1: shared nonzero audio/video start implies zero relative offset
+00:00 +7: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R1: audio preceding video must retain its signed offset
+00:00 +8: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-C1: canonical removal plan cannot be mutated out of consistency
+00:00 +9: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R4: 8s waveform on 10s ruler keeps a peak at second 4
+00:00 +10: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R4: 8s waveform on 10s ruler keeps a peak at second 4
+00:00 +11: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R4: 8s waveform on 10s ruler keeps a peak at second 4
+00:01 +12: All tests passed!

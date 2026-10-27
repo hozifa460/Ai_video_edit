@@ -1,0 +1,5 @@
+﻿00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_revision_offsets_test.dart
+00:00 +0: B01-R1 follow-up: long pre-roll must retain the measured origin
+00:00 +1: B01-R1 follow-up: audio entirely before video contributes no removal
+00:00 +2: B01-R1 follow-up: delayed audio retains its origin beyond video end
+00:00 +3: All tests passed!

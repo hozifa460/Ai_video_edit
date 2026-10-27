@@ -1,0 +1,22 @@
+﻿SR-06 precision acceptance runs (OpenCode, 2026-10-06)
+command: flutter test --no-pub docs/reviews/repro/<file> --reporter compact
+
+== codex_batch01_acceptance_test.dart ==
+00:04 +7: All tests passed!
+
+== codex_batch01_final_waveform_test.dart ==
+00:03 +2: All tests passed!
+
+== codex_batch01_revision_offsets_test.dart ==
+00:03 +3: All tests passed!
+
+== codex_sr06_acceptance_test.dart ==
+00:02 +5: All tests passed!
+
+== codex_sr06_timestamp_precision_test.dart ==
+00:02 +5: All tests passed!
+
+== silence_characterization_test.dart ==
+00:02 +2: All tests passed!
+
+total acceptance cases run: 24

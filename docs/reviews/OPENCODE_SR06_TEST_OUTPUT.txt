@@ -1,0 +1,273 @@
+﻿00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart
+00:00 +0: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command always has highpass + compand
+00:00 +1: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command no deesser when disabled
+00:00 +2: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command deesser appears when > 0
+00:00 +3: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command volume appears only when not 100
+00:00 +4: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command all equalizer bands appear
+00:00 +5: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command compand points respect noise floor
+00:00 +6: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_enhancement_test.dart: Audio enhancer filter command gate pushes the noise floor below the original level
+00:01 +7: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_preview_command_test.dart: Audio preview command builder builds original preview as playable m4a without filters
+00:01 +8: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/audio_preview_command_test.dart: Audio preview command builder builds enhanced preview with filters and playable m4a output
+00:02 +9: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder trims video and audio together with optional audio mapping
+00:02 +10: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder trims audio without video mapping
+00:02 +11: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder remove mode keeps both sides and concats A/V streams
+00:02 +12: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder remove mode at the beginning falls back to a tail trim
+00:02 +13: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder remove mode at the end falls back to a head trim
+00:02 +14: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder video remove mode can build a video-only concat fallback
+00:02 +15: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder builds audio split commands for every output piece
+00:02 +16: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter command builder builds split commands from manual cut points
+00:02 +17: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast video trim copies streams without re-encoding
+00:02 +18: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast audio trim copies without video
+00:02 +19: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands default trim behavior stays re-encoding
+00:02 +20: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast remove in the middle yields two copy parts and a concat step
+00:03 +21: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast remove from zero copies the tail straight to the output
+00:03 +22: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast remove to the end copies the head straight to the output
+00:03 +23: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast remove refuses to delete the whole file
+00:03 +24: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast stream-copy commands fast split copies every part without re-encoding
+00:03 +25: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility h264 video with aac audio is compatible
+00:03 +26: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility h264 video without an audio stream is compatible
+00:03 +27: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility vp8 video is rejected
+00:03 +28: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility h264 video with opus audio is rejected
+00:03 +29: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility hevc and mpeg4 video with mp3 audio are compatible
+00:03 +30: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast copy compatibility unknown video codecs and codecs are case-insensitive
+00:03 +31: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command middle removal concats two windows around the splice point
+00:03 +32: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command removal starting at 0 keeps only the post window
+00:03 +33: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command removal extending to the end keeps only the pre window
+00:03 +34: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command removing the whole file throws
+00:03 +35: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command audio-only removal concats atrim windows
+00:03 +36: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter remove preview command video removal without audio concats video-only windows
+00:03 +37: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command two removal ranges keep three segments in timeline order
+00:03 +38: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command single middle range matches buildRemoveCommand exactly
+00:03 +39: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command single middle audio range matches buildRemoveCommand exactly
+00:03 +40: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command single middle video-only range matches buildRemoveCommand exactly
+00:03 +41: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command audio-only multi remove concats atrim segments only
+00:03 +42: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command video without audio concats trim segments only
+00:03 +43: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command empty ranges throw
+00:03 +44: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command overlapping ranges throw
+00:03 +45: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command removing the whole file throws
+00:03 +46: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command zero-length kept segments are ignored
+00:03 +47: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove command removal from the start starts the first trim at the range end
+00:03 +48: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast multi remove commands three kept segments yield three copies plus a concat merge
+00:03 +49: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast multi remove commands single kept segment copies straight to the output
+00:03 +50: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter fast multi remove commands fast multi remove rejects empty, overlapping and full ranges
+00:03 +51: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove preview command windows around two ranges are concatenated in order
+00:03 +52: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove preview command windows clamp at 0 and total
+00:03 +53: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove preview command audio-only preview concats atrim windows
+00:03 +54: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove preview command empty ranges throw
+00:03 +55: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/media_cutter_command_test.dart: Media cutter multi remove preview command removing the whole file throws
+00:03 +56: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/professional_audio_editor_service_test.dart: Professional audio editor service accepts the requested audio formats
+00:03 +57: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/professional_audio_editor_service_test.dart: Professional audio editor service builds lossless trim command with stream copy
+00:03 +58: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/professional_audio_editor_service_test.dart: Professional audio editor service builds middle delete command with atrim concat
+00:04 +59: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/professional_audio_editor_service_test.dart: Professional audio editor service parses silence logs and proposes smart cut centers
+00:05 +60: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 1ms gap between the passes survives detection
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:05 +61: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 10ms gap between the passes survives detection
+00:05 +62: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 19ms gap between the passes survives detection
+00:05 +63: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 20ms gap between the passes survives detection
+00:05 +64: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 21ms gap between the passes survives detection
+00:05 +65: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap a 200ms gap between the passes survives detection
+00:05 +66: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap true overlap between the passes is still unioned
+00:05 +67: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap exact touch between the passes is still unioned
+00:05 +68: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R2 the two-pass datasource fills no positive gap raising minSilenceDuration does not widen the merged result
+00:06 +69: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R3 the datasource ignores degenerate log pairs a zero-length pair yields no interval and no exception
+00:06 +70: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R3 the datasource ignores degenerate log pairs an inverted pair yields no interval and no exception
+00:06 +71: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R3 the datasource ignores degenerate log pairs degenerate pairs mixed with valid ones keep only the valid ones
+00:06 +72: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R3 the datasource ignores degenerate log pairs only a malformed silence_start yields nothing
+00:06 +73: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset a shared non-zero origin implies zero offset
+00:06 +74: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset audio before video keeps its negative offset
+00:06 +75: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset audio after video reports a positive offset
+00:06 +76: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset missing audio start_time falls back to the video origin
+00:06 +77: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset missing video start_time falls back to the container origin
+00:06 +78: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset no start_time anywhere means zero offset, not zero video time
+00:06 +79: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset a stream without a duration falls back to the container duration
+00:06 +80: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset a file with no audio reports hasAudio false
+00:06 +81: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset an offset larger than the video duration survives the real probe
+00:06 +82: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset an audio stream that never meets the video yields no intersection
+00:06 +83: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: B01-R1 the probe measures a signed relative audio offset the video stream duration wins over a longer container duration
+00:06 +84: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: media information failures stay typed a file with no readable duration returns CorruptedFileFailure
+00:06 +85: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: timestamp and duration parsing are separate contracts a negative timestamp is preserved
+00:06 +86: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: timestamp and duration parsing are separate contracts a negative duration is discarded
+00:06 +87: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: timestamp and duration parsing are separate contracts absent and non-numeric fields become null for timestamps
+00:06 +88: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_datasources_test.dart: timestamp and duration parsing are separate contracts absent durations become zero
+00:07 +89: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the blocker order is fixed an unreadable duration wins over every other reason
+00:07 +90: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the blocker order is fixed a missing audio track wins over a missing overlap
+00:07 +91: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the blocker order is fixed a missing overlap is only reported when duration and audio are fine
+00:07 +92: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the blocker order is fixed each blocker message names its own cause
+00:07 +93: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #0: canDetect matches isDetectable
+00:07 +94: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #1: canDetect matches isDetectable
+00:07 +95: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #2: canDetect matches isDetectable
+00:07 +96: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #3: canDetect matches isDetectable
+00:07 +97: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #4: canDetect matches isDetectable
+00:07 +98: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #5: canDetect matches isDetectable
+00:07 +99: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the gate agrees with MediaTimeline.isDetectable timeline #6: canDetect matches isDetectable
+00:07 +100: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the screen and the repository report the same reason no readable duration: screen text equals the repository failure
+00:07 +101: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the screen and the repository report the same reason no audio track: screen text equals the repository failure
+00:07 +102: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the screen and the repository report the same reason no audio/video overlap: screen text equals the repository failure
+00:07 +103: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the screen and the repository report the same reason a detectable timeline produces no message at all
+00:07 +104: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the screen and the repository report the same reason the screen message is not the old combined wording
+00:07 +105: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +106: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +107: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +108: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +109: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +110: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +111: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +112: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +113: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +114: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +115: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +116: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +117: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +118: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +119: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +120: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:08 +121: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +122: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +123: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +124: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +125: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +126: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +127: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +128: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +129: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +130: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +131: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +132: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +133: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +134: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +135: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +136: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +137: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +138: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +139: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +140: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +141: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +142: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:09 +143: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +144: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +145: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +146: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +147: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +148: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +149: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +150: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +151: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +152: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +153: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +154: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +155: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +156: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +157: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +158: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:10 +159: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible the screen message renders as a SnackBar body
+00:11 +160: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_detection_blocker_test.dart: the reason is user-visible a detectable file shows no blocked SnackBar
+00:12 +161: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: both passes are commanded with the user minimum min=0.01 reaches both passes and nothing else
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:12 +162: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: both passes are commanded with the user minimum min=0.25 reaches both passes and nothing else
+00:12 +163: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: both passes are commanded with the user minimum min=2.0 reaches both passes and nothing else
+00:12 +164: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: both passes are commanded with the user minimum min=5.0 reaches both passes and nothing else
+00:12 +165: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: both passes are commanded with the user minimum the two passes still differ in threshold only
+00:12 +166: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.4s pause is rejected at min=2.0
+00:12 +167: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.4s pause is rejected at min=5.0
+00:12 +168: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.4s pause is kept at min=0.01
+00:12 +169: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.4s pause is kept at min=0.25
+00:12 +170: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.4s pause is rejected at min=2s
+00:12 +171: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 0.9s pause is rejected at min=2s
+00:12 +172: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 1.99s pause is rejected at min=2s
+00:12 +173: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 2s pause is accepted at min=2s
+00:12 +174: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 2.01s pause is accepted at min=2s
+00:12 +175: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a 5s pause is accepted at min=5s
+00:12 +176: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a synthesized trailing silence below the minimum is rejected
+00:12 +177: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: a silence shorter than the minimum never enters removal a synthesized trailing silence above the minimum is accepted
+00:12 +178: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive the tolerance is one millisecond
+00:12 +179: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive a length exactly at the minimum is accepted
+00:12 +180: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive a length just inside the tolerance is accepted
+00:12 +181: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive a length beyond the tolerance is rejected
+00:12 +182: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive a non-finite length is never accepted
+00:12 +183: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive a non-positive minimum accepts every finite length
+00:13 +184: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the float boundary is documented and inclusive the boundary holds through the datasource, not just the helper
+00:13 +185: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the other pipeline contracts are unchanged a positive gap between two accepted silences is still kept
+00:13 +186: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the other pipeline contracts are unchanged overlapping and touching silences are still unioned
+00:13 +187: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the other pipeline contracts are unchanged guards shrink an accepted silence below the minimum and it is still removed
+00:13 +188: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_min_duration_test.dart: the other pipeline contracts are unchanged a raw silence below the minimum produces no removal at all
+00:14 +189: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants statistics use the union, not the raw sum
+00:14 +190: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants seconds are converted to milliseconds explicitly
+00:14 +191: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants removed ratio stays inside [0,1] for a zero-length timeline
+00:14 +192: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants a plan that deletes everything reports it instead of crashing
+00:14 +193: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants nested, overlapping and unsorted input normalizes once
+00:14 +194: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants excluding one interval rebuilds statistics and the kept ranges
+00:14 +195: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants excluding an out-of-range index is a no-op
+00:14 +196: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: SilenceRemovalPlan invariants empty removal list is a valid, honest plan
+00:14 +197: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) probe values that are not usable numbers collapse to zero
+00:14 +198: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) a negative offset keeps its sign (audio starting before video)
+00:14 +199: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) an offset larger than the video duration is preserved as measured
+00:14 +200: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) only a non-finite offset falls back to zero
+00:14 +201: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) audio offset moves detected intervals onto the video timeline
+00:14 +202: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) detection cannot reach past the video when audio starts late
+00:14 +203: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) a negative offset shifts intervals left and keeps the in-video part
+00:14 +204: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) videoToAudioTimeline inverts audioToVideoTimeline
+00:14 +205: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) video longer than audio keeps the picture tail (acceptance fixture)
+00:14 +206: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) a failed waveform cannot become the timeline
+00:14 +207: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) aligned audio and video need no shifting
+00:14 +208: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) unknown timeline reports itself as undetectable
+00:14 +209: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) copyWith preserves probed timing and can flip hasAudio
+00:14 +210: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: MediaTimeline keeps the video timeline authoritative (SR-05, B01-R1) audioTimeToVideoTime and audioVisibleRange expose the same window
+00:14 +211: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit a long pre-roll keeps the measured offset and lands inside the video
+00:14 +212: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit audio that ends before the video starts yields an empty intersection
+00:14 +213: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit audio that starts after the video ends yields an empty intersection
+00:14 +214: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit a known audio duration is used even when it exceeds the video
+00:14 +215: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit an unknown audio duration derives the window from the video end
+00:14 +216: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit the round trip still inverts for an offset larger than the video
+00:14 +217: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-R1 follow-up: the audio/video intersection is explicit an unusable video duration has no window at all
+00:14 +218: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-C1 the canonical plan cannot be mutated out of consistency removals and kept reject in-place mutation
+00:14 +219: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-C1 the canonical plan cannot be mutated out of consistency mutating the source list after building does not affect the plan
+00:14 +220: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_removal_plan_test.dart: B01-C1 the canonical plan cannot be mutated out of consistency withoutRemoval returns a new immutable plan and leaves the old one
+00:17 +221: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +222: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +223: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +224: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +225: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +226: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +227: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +228: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +229: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +230: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +231: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +232: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +233: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +234: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +235: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +236: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +237: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +238: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:18 +239: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:19 +240: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an 8s waveform on a 10s ruler keeps its peak at second 4
+00:20 +241: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler the ruler past the end of the audio stays empty
+00:20 +242: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an explicit audio duration overrides the waveform duration
+00:20 +243: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler a positive audio offset moves the audio window right
+00:20 +244: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler a negative audio offset shifts the window left
+00:20 +245: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler a pre-roll longer than the video is not stretched onto it
+00:20 +246: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler audio entirely before the video draws nothing
+00:21 +247: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler audio entirely after the video draws nothing
+00:21 +248: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler silence regions are matched against video time when colouring
+00:21 +249: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler only valid silence segments paint a removal band
+00:21 +250: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler a zero-length ruler draws nothing instead of dividing by zero
+00:21 +251: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler a missing waveform leaves the ruler empty
+00:22 +252: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler an empty sample list leaves the ruler empty
+00:22 +253: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/video_import_metadata_test.dart: Video import metadata parses FFprobe duration seconds as real milliseconds
+00:22 +254: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler tapping maps to video time on the ruler
+00:22 +255: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-R4 the waveform sits on the video ruler tapping inside a shifted audio window still seeks video time
+00:22 +256: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a lone peak at source index 999 is drawn
+00:22 +257: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a lone peak at source index 1000 is drawn
+00:23 +258: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a lone peak at source index 1001 is drawn
+00:23 +259: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a lone peak at source index 1999 is drawn
+00:23 +260: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a peak is preserved at a narrow width too
+00:23 +261: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a peak is preserved at high zoom
+00:23 +262: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks when several samples share a column the loudest wins
+00:23 +263: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/silence_waveform_rendering_test.dart: B01-F1 decimation preserves peaks a peak on the intersection boundary is still drawn
+00:24 +264: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/widget_test.dart: App renders without error
+00:24 +265: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/widget_test.dart: App renders without error
+00:24 +266: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/test/widget_test.dart: App renders without error
+00:28 +267: All tests passed!

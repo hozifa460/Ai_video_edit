@@ -1,0 +1,77 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_revision_acceptance_test.dart
+00:00 +0: B1-R1: output started before SmartZoom edit cannot certify new recipe
+00:00 +0 -1: B1-R1: output started before SmartZoom edit cannot certify new recipe [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                                       expect
+  package:flutter_test/src/widget_tester.dart 473:18                    expect
+  docs\reviews\repro\codex_batch_b1_revision_acceptance_test.dart 49:5  main.<fn>
+  
+00:00 +0 -1: B1-R1: output started before keep cannot certify the new plan
+00:00 +0 -2: B1-R1: output started before keep cannot certify the new plan [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                                       expect
+  package:flutter_test/src/widget_tester.dart 473:18                    expect
+  docs\reviews\repro\codex_batch_b1_revision_acceptance_test.dart 61:5  main.<fn>
+  
+00:00 +0 -2: B1-R3: late Auto must not undo a newer SmartZoom edit
+00:00 +0 -3: B1-R3: late Auto must not undo a newer SmartZoom edit [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                                       expect
+  package:flutter_test/src/widget_tester.dart 473:18                    expect
+  docs\reviews\repro\codex_batch_b1_revision_acceptance_test.dart 73:5  main.<fn>
+  
+00:00 +0 -3: B1-R3: finishing Auto must not expose old plan during newer detection
+00:00 +0 -4: B1-R3: finishing Auto must not expose old plan during newer detection [E]
+  Expected: false
+    Actual: <true>
+  
+  package:matcher                                                       expect
+  package:flutter_test/src/widget_tester.dart 473:18                    expect
+  docs\reviews\repro\codex_batch_b1_revision_acceptance_test.dart 91:5  main.<fn>
+  
+00:00 +0 -4: B1-R3: Auto started during detection must not restore detecting after completion
+00:00 +0 -5: B1-R3: Auto started during detection must not restore detecting after completion [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                                        expect
+  package:flutter_test/src/widget_tester.dart 473:18                     expect
+  docs\reviews\repro\codex_batch_b1_revision_acceptance_test.dart 106:5  main.<fn>
+  
+00:00 +0 -5: B1-R4: timeline for B must not display the global A plan
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following TestFailure was thrown running a test:
+Expected: no matching candidates
+  Actual: _IconWidgetFinder:<Found 1 widget with icon "IconData(U+0E1BB)": [
+            Icon(IconData(U+0E1BB), size: 18.0, color: Color(alpha: 1.0000, red: 1.0000, green:
+0.2784, blue: 0.3412, colorSpace: ColorSpace.sRGB), dependencies: [Directionality, IconTheme]),
+          ]>
+   Which: means one was found but none were expected
+
+When the exception was thrown, this was the stack:
+#4      main.<anonymous closure> (file:///C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_revision_acceptance_test.dart:125:5)
+<asynchronous suspension>
+#5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1059:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+This was caught by the test expectation on the following line:
+  file:///C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_revision_acceptance_test.dart line 125
+The test description was:
+  B1-R4: timeline for B must not display the global A plan
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:00 +0 -6: B1-R4: timeline for B must not display the global A plan [E]
+  Test failed. See exception logs above.
+  The test description was: B1-R4: timeline for B must not display the global A plan
+  
+00:00 +0 -6: control B1-R2: old completion must not stop a newer detection
+00:00 +1 -6: Some tests failed.

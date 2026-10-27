@@ -1,0 +1,43 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart
+00:00 +0: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R1: keeping a range invalidates its rendered output
+00:00 +1: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R1: new detection invalidates the previous rendered output
+00:00 +2: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R1: a closed session cannot accept a late rendered output
+00:00 +3: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R2: discarded detection does not remain in detecting status
+00:00 +4: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R3: Auto must not overwrite a newer manual setting
+00:00 +5: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R3: Auto finishing after disposal must not notify or commit
+00:00 +6: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R3: unchanged Auto result does not disable a current plan
+00:00 +7: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +8: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +9: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +10: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +11: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +11: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R2: actual two-pass datasource preserves a positive 10ms gap
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:00 +12: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +13: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: B1-R4: stale controller must not fall back to editing global plan
+00:00 +14: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R1: shared nonzero audio/video start implies zero relative offset
+00:00 +15: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R1: shared nonzero audio/video start implies zero relative offset
+00:00 +16: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart: control: unchanged current detection remains previewable
+00:01 +17: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R1: audio preceding video must retain its signed offset
+00:01 +18: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-C1: canonical removal plan cannot be mutated out of consistency
+00:01 +19: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_acceptance_test.dart: B01-R4: 8s waveform on 10s ruler keeps a peak at second 4
+00:01 +20: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_final_waveform_test.dart: waveform retains a peak at source index 999
+00:01 +21: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_final_waveform_test.dart: waveform retains a peak at source index 999
+00:01 +22: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_final_waveform_test.dart: waveform retains a peak at source index 999
+00:02 +23: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_final_waveform_test.dart: waveform retains a peak at source index 1000
+00:02 +24: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart: SR06-R1: 9.5ms is genuinely below a 10ms minimum
+00:02 +25: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart: numeric control: binary subtraction at the boundary stays accepted
+00:02 +26: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart: SR06-R1: actual datasource rejects a 9.5ms parsed interval
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:02 +27: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart: SR06-R2: 20ms trailing silence is accepted at a 10ms minimum
+00:02 +28: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart: pipeline control: real datasource accepts raw minimum before guards
+00:02 +29: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_timestamp_precision_test.dart: SR06-R3: exact 10ms decimal interval 0.01..0.02
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:02 +30: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_timestamp_precision_test.dart: SR06-R3: exact 10ms decimal interval 9.98..9.99
+00:02 +31: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_timestamp_precision_test.dart: SR06-R3: exact 10ms decimal interval 3600.01..3600.02
+00:02 +32: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_timestamp_precision_test.dart: SR06-R3: exact 10ms trailing interval after one hour
+00:02 +33: C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_timestamp_precision_test.dart: control: genuinely shorter 9.5ms after one hour remains rejected
+00:02 +34: All tests passed!

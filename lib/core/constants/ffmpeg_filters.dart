@@ -1,0 +1,42 @@
+class FfmpegFilterConstants {
+  FfmpegFilterConstants._();
+
+  static const String eqBrightness = 'brightness';
+  static const String eqContrast = 'contrast';
+  static const String eqSaturation = 'saturation';
+  static const String eqGamma = 'gamma';
+  static const String hue = 'hue';
+  static const String unsharp = 'unsharp';
+  static const String boxblur = 'boxblur';
+  static const String curves = 'curves';
+  static const String colorbalance = 'colorbalance';
+  static const String colortemperature = 'colortemperature';
+  static const String colorchannelmixer = 'colorchannelmixer';
+  static const String vignette = 'vignette';
+  static const String noise = 'noise';
+  static const String hqdn3d = 'hqdn3d';
+  static const String lenscorrection = 'lenscorrection';
+  static const String lut3d = 'lut3d';
+  static const String transpose = 'transpose';
+  static const String hflip = 'hflip';
+  static const String vflip = 'vflip';
+  static const String crop = 'crop';
+  static const String scale = 'scale';
+  static const String setpts = 'setpts';
+  static const String atempo = 'atempo';
+  static const String reverse = 'reverse';
+  static const String areverse = 'areverse';
+  static const String fade = 'fade';
+  static const String vidstabdetect = 'vidstabdetect';
+  static const String vidstabtransform = 'vidstabtransform';
+  static const String volume = 'volume';
+  static const String afftdn = 'afftdn';
+  static const String loudnorm = 'loudnorm';
+  static const String afade = 'afade';
+  static const String bass = 'bass';
+  static const String treble = 'treble';
+  static const String acompressor = 'acompressor';
+  static const String asetrate = 'asetrate';
+  static const String aevalsrc = 'aevalsrc';
+  static const String amix = 'amix';
+}

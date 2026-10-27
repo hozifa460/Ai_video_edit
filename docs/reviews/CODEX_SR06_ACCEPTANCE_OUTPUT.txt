@@ -1,0 +1,34 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_sr06_acceptance_test.dart
+00:00 +0: SR06-R1: 9.5ms is genuinely below a 10ms minimum
+00:00 +0 -1: SR06-R1: 9.5ms is genuinely below a 10ms minimum [E]
+  Expected: false
+    Actual: <true>
+  
+  package:matcher                                          expect
+  package:flutter_test/src/widget_tester.dart 473:18       expect
+  docs\reviews\repro\codex_sr06_acceptance_test.dart 70:5  main.<fn>
+  
+00:00 +0 -1: numeric control: binary subtraction at the boundary stays accepted
+00:00 +1 -1: SR06-R1: actual datasource rejects a 9.5ms parsed interval
+Loading ffmpeg-kit-flutter.
+Loaded ffmpeg-kit-flutter-test-test-test-8.0.0.
+00:00 +1 -2: SR06-R1: actual datasource rejects a 9.5ms parsed interval [E]
+  Expected: empty
+    Actual: [SilenceSegment:SilenceSegment(2.0, 2.0095)]
+  
+  package:matcher                                          expect
+  package:flutter_test/src/widget_tester.dart 473:18       expect
+  docs\reviews\repro\codex_sr06_acceptance_test.dart 90:5  main.<fn>
+  
+00:00 +1 -2: SR06-R2: 20ms trailing silence is accepted at a 10ms minimum
+00:00 +1 -3: SR06-R2: 20ms trailing silence is accepted at a 10ms minimum [E]
+  Expected: [SilenceSegment:SilenceSegment(1.0, 1.02)]
+    Actual: []
+     Which: at location [0] is [] which shorter than expected
+  
+  package:matcher                                           expect
+  package:flutter_test/src/widget_tester.dart 473:18        expect
+  docs\reviews\repro\codex_sr06_acceptance_test.dart 100:5  main.<fn>
+  
+00:00 +1 -3: pipeline control: real datasource accepts raw minimum before guards
+00:00 +2 -3: Some tests failed.

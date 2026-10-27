@@ -1,0 +1,106 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart
+00:00 +0: B1-R1: keeping a range invalidates its rendered output
+00:00 +0 -1: B1-R1: keeping a range invalidates its rendered output [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                              expect
+  package:flutter_test/src/widget_tester.dart 473:18           expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 63:5  main.<fn>
+  
+00:00 +0 -1: B1-R1: new detection invalidates the previous rendered output
+00:00 +0 -2: B1-R1: new detection invalidates the previous rendered output [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                              expect
+  package:flutter_test/src/widget_tester.dart 473:18           expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 73:5  main.<fn>
+  
+00:00 +0 -2: B1-R1: a closed session cannot accept a late rendered output
+00:00 +0 -3: B1-R1: a closed session cannot accept a late rendered output [E]
+  Expected: null
+    Actual: 'late.mp4'
+  
+  package:matcher                                              expect
+  package:flutter_test/src/widget_tester.dart 473:18           expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 82:5  main.<fn>
+  
+00:00 +0 -3: B1-R2: discarded detection does not remain in detecting status
+00:00 +0 -4: B1-R2: discarded detection does not remain in detecting status [E]
+  Expected: false
+    Actual: <true>
+  
+  package:matcher                                              expect
+  package:flutter_test/src/widget_tester.dart 473:18           expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 94:5  main.<fn>
+  
+00:00 +0 -4: B1-R3: Auto must not overwrite a newer manual setting
+00:00 +0 -5: B1-R3: Auto must not overwrite a newer manual setting [E]
+  Expected: <-21>
+    Actual: <-40.0>
+  
+  package:matcher                                               expect
+  package:flutter_test/src/widget_tester.dart 473:18            expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 105:5  main.<fn>
+  
+00:00 +0 -5: B1-R3: Auto finishing after disposal must not notify or commit
+00:00 +0 -6: B1-R3: Auto finishing after disposal must not notify or commit [E]
+  A EditorDetectionController was used after being disposed.
+  Once you have called dispose() on a EditorDetectionController, it can no longer be used.
+  package:flutter/src/foundation/change_notifier.dart 182:9                                                           ChangeNotifier.debugAssertNotDisposed.<fn>
+  package:flutter/src/foundation/change_notifier.dart 189:6                                                           ChangeNotifier.debugAssertNotDisposed
+  package:flutter/src/foundation/change_notifier.dart 414:27                                                          ChangeNotifier.notifyListeners
+  package:ai_video_editing/features/silence_detector/presentation/controllers/editor_detection_controller.dart 207:7  EditorDetectionController.autoDetectThreshold
+  
+00:00 +0 -6: B1-R3: unchanged Auto result does not disable a current plan
+00:00 +0 -7: B1-R3: unchanged Auto result does not disable a current plan [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                               expect
+  package:flutter_test/src/widget_tester.dart 473:18            expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 122:5  main.<fn>
+  
+00:00 +0 -7: B1-R4: stale controller must not fall back to editing global plan
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following TestFailure was thrown running a test:
+Expected: SilenceRemovalPlan:<SilenceRemovalPlan(10.0, [SilenceSegment(1.0, 2.0)],
+[SilenceSegment(0.0, 1.0), SilenceSegment(2.0, 10.0)])>
+  Actual: SilenceRemovalPlan:<SilenceRemovalPlan(10.0, [], [SilenceSegment(0.0, 10.0)])>
+
+When the exception was thrown, this was the stack:
+#4      main.<anonymous closure> (file:///C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart:142:5)
+<asynchronous suspension>
+#5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1059:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+This was caught by the test expectation on the following line:
+  file:///C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch_b1_acceptance_test.dart line 142
+The test description was:
+  B1-R4: stale controller must not fall back to editing global plan
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:00 +0 -8: B1-R4: stale controller must not fall back to editing global plan [E]
+  Test failed. See exception logs above.
+  The test description was: B1-R4: stale controller must not fall back to editing global plan
+  
+00:00 +0 -8: B1-R5: controller preserves the shared blocker message contract
+00:00 +0 -9: B1-R5: controller preserves the shared blocker message contract [E]
+  Expected: 'This file has no readable duration, so nothing can be cut'
+    Actual: 'No usable media duration'
+     Which: is different.
+            Expected: This file  ...
+              Actual: No usable  ...
+                      ^
+             Differ at offset 0
+  
+  package:matcher                                               expect
+  package:flutter_test/src/widget_tester.dart 473:18            expect
+  docs\reviews\repro\codex_batch_b1_acceptance_test.dart 151:5  main.<fn>
+  
+00:00 +0 -9: control: unchanged current detection remains previewable
+00:00 +1 -9: Some tests failed.

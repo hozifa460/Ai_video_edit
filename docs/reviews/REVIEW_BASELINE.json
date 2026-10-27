@@ -1,0 +1,1363 @@
+{
+  "review_date": "2026-10-05",
+  "git_baseline": null,
+  "scope": "lib Dart, test Dart, and selected project config; no secrets or build outputs",
+  "files": [
+    {
+      "path": "lib/app.dart",
+      "lines": 21,
+      "symbols": [
+        "SilenceRemoverApp"
+      ],
+      "providers": [],
+      "sha256": "cf00fde3f8058f8935016e988f4eb2cfe8e77d92a400420f021e1a04c6255a12"
+    },
+    {
+      "path": "lib/core/constants/adjustment_defaults.dart",
+      "lines": 98,
+      "symbols": [
+        "AdjustmentDefaults"
+      ],
+      "providers": [],
+      "sha256": "7aa7bd432e242ebf87ca8236662cb08fb1131d78ba000e3a61c7050dc8f8dbf3"
+    },
+    {
+      "path": "lib/core/constants/app_constants.dart",
+      "lines": 34,
+      "symbols": [
+        "AppConstants"
+      ],
+      "providers": [],
+      "sha256": "3783e9ef0c2cb5e35d6dcf99b85debb1c6f6ebd9e0fa8d7bd351cd8f8ef83d8b"
+    },
+    {
+      "path": "lib/core/constants/ffmpeg_filters.dart",
+      "lines": 42,
+      "symbols": [
+        "FfmpegFilterConstants"
+      ],
+      "providers": [],
+      "sha256": "7a8b4a52d45c2b526f8e70fd5102b4b7c533e8c988868826a1effd24bc178bf2"
+    },
+    {
+      "path": "lib/core/enums/export_quality.dart",
+      "lines": 5,
+      "symbols": [
+        "ExportQuality"
+      ],
+      "providers": [],
+      "sha256": "8574fcc018b038f09479d01eed5ea73e2db51c77c56212512480c722585e6ad2"
+    },
+    {
+      "path": "lib/core/enums/processing_state.dart",
+      "lines": 9,
+      "symbols": [
+        "ProcessingState"
+      ],
+      "providers": [],
+      "sha256": "c467da3447694265e2e2ae2cdc07be5aed1e4dbd0139cee2b0ec9e02807ade6d"
+    },
+    {
+      "path": "lib/core/errors/failures.dart",
+      "lines": 52,
+      "symbols": [
+        "Failure",
+        "VideoImportFailure",
+        "AudioExtractionFailure",
+        "SilenceDetectionFailure",
+        "VideoProcessingFailure",
+        "ExportFailure",
+        "PermissionFailure",
+        "StorageFailure",
+        "CorruptedFileFailure",
+        "NoAudioTrackFailure",
+        "EnhancementFailure"
+      ],
+      "providers": [],
+      "sha256": "d2c43d58f5d5a838f6c2a4f967495836e3a59e530772aba9597eff63b6c64624"
+    },
+    {
+      "path": "lib/core/extensions/num_extensions.dart",
+      "lines": 15,
+      "symbols": [
+        "DoubleExtensions",
+        "IntExtensions"
+      ],
+      "providers": [],
+      "sha256": "dddf77ff6438bced4f71d228ac7c80e14101ad77721b2dddf8ceb74ec9b3417d"
+    },
+    {
+      "path": "lib/core/router/app_router.dart",
+      "lines": 116,
+      "symbols": [
+        "AppRouter"
+      ],
+      "providers": [],
+      "sha256": "00125e2e5c1dc1923b289d77c8e4a00a50dd8059f738c355431c0c1b78abe23f"
+    },
+    {
+      "path": "lib/core/services/draft_service.dart",
+      "lines": 196,
+      "symbols": [
+        "DraftData",
+        "DraftService"
+      ],
+      "providers": [],
+      "sha256": "301bafc9399450c05ff3ad3e4e3889ceafc172e8841afec51aa1694dba86987d"
+    },
+    {
+      "path": "lib/core/services/face_detection_service.dart",
+      "lines": 283,
+      "symbols": [
+        "_FaceTrack",
+        "FaceDetectionService"
+      ],
+      "providers": [],
+      "sha256": "2b5f7dd3b71da7fae86370615b96f8be640bbff5961aa1c0813e85589ebef54a"
+    },
+    {
+      "path": "lib/core/services/video_download_service.dart",
+      "lines": 549,
+      "symbols": [
+        "CancelToken",
+        "DownloadProgress",
+        "_SpeedTracker",
+        "YoutubeQualityOption",
+        "VideoDownloadService",
+        "CancelledDownloadException"
+      ],
+      "providers": [],
+      "sha256": "035b52939494c7bcd14d394ea6d2a42025fc70eeaba1fec279b527f170f9dbd9"
+    },
+    {
+      "path": "lib/core/theme/app_colors.dart",
+      "lines": 35,
+      "symbols": [
+        "AppColors"
+      ],
+      "providers": [],
+      "sha256": "c50f0f48b95b57aa90b05ea38b8601ee5fa33548bca0e1bd3e1f4d4aea15c840"
+    },
+    {
+      "path": "lib/core/theme/app_theme.dart",
+      "lines": 158,
+      "symbols": [
+        "AppTheme"
+      ],
+      "providers": [],
+      "sha256": "548272750a7d96c6f0eb325fbef14281766745a17505de5540bfbc063354ac25"
+    },
+    {
+      "path": "lib/core/utils/duration_utils.dart",
+      "lines": 28,
+      "symbols": [
+        "DurationUtils"
+      ],
+      "providers": [],
+      "sha256": "474bd712f5df1680d3c7e17d6a3a2d1c2179d426b51130236f5d8e225bc5628b"
+    },
+    {
+      "path": "lib/core/utils/exports.dart",
+      "lines": 4,
+      "symbols": [],
+      "providers": [],
+      "sha256": "b63e283cebb886d085c90e56062d09af91057694018112bd81672ee8a73594f5"
+    },
+    {
+      "path": "lib/core/utils/file_utils.dart",
+      "lines": 93,
+      "symbols": [
+        "FileUtils"
+      ],
+      "providers": [],
+      "sha256": "4547ce6d5631949bd1f600df793253cb815751eb962edf4abdca91b16b044354"
+    },
+    {
+      "path": "lib/core/utils/filter_chain_builder.dart",
+      "lines": 260,
+      "symbols": [
+        "FilterChainBuilder"
+      ],
+      "providers": [],
+      "sha256": "e0d32dcedd5ab5adb9bf8ca3164a434a801e5c9df8d5445c6385139e48b487ca"
+    },
+    {
+      "path": "lib/core/utils/frame_extractor.dart",
+      "lines": 49,
+      "symbols": [
+        "FrameExtractor"
+      ],
+      "providers": [],
+      "sha256": "affee6b586fef1a570713ba8760f6e1a4f9d62e8784f22916c3d0dd460a8d363"
+    },
+    {
+      "path": "lib/core/utils/logger.dart",
+      "lines": 30,
+      "symbols": [
+        "LogLevel",
+        "AppLogger"
+      ],
+      "providers": [],
+      "sha256": "4ea27c8d378514a6812865be378cbb311960abde1cd20f1243f40e41ed7bf2b2"
+    },
+    {
+      "path": "lib/core/utils/media_scanner.dart",
+      "lines": 18,
+      "symbols": [
+        "MediaScanner"
+      ],
+      "providers": [],
+      "sha256": "a41c55b5721de7d997056228e52b5c1e97f05128197968406431f31ef77ace84"
+    },
+    {
+      "path": "lib/core/utils/result.dart",
+      "lines": 15,
+      "symbols": [
+        "Result",
+        "Success",
+        "AppError"
+      ],
+      "providers": [],
+      "sha256": "2cf033de6c0f1775230c3840b0fe961c1bf9b2e82628f9788c143483bef23738"
+    },
+    {
+      "path": "lib/features/audio_enhancement/data/services/audio_enhancement_filter_builder.dart",
+      "lines": 63,
+      "symbols": [
+        "AudioEnhancementFilterBuilder"
+      ],
+      "providers": [],
+      "sha256": "3777c80aab6f3c39ee6fb9289138d530303463d90928799efba115b57a43ca03"
+    },
+    {
+      "path": "lib/features/audio_enhancement/data/services/audio_preview_command_builder.dart",
+      "lines": 32,
+      "symbols": [
+        "AudioPreviewCommandBuilder"
+      ],
+      "providers": [],
+      "sha256": "012f740eda53dbad012d6d8696c2404f511f4d828fc769133f1c6c144c940332"
+    },
+    {
+      "path": "lib/features/audio_enhancement/data/services/auto_noise_detector.dart",
+      "lines": 53,
+      "symbols": [
+        "AutoNoiseDetector"
+      ],
+      "providers": [],
+      "sha256": "ea3d23a6475b5995585ac0ce03bca550530bca5d84d470ca8ccdf9dd1eb22195"
+    },
+    {
+      "path": "lib/features/audio_enhancement/presentation/screens/audio_enhancement_screen.dart",
+      "lines": 1095,
+      "symbols": [
+        "AudioEnhancePreset",
+        "_PresetValues",
+        "AudioEnhancementScreen",
+        "_AudioEnhancementScreenState"
+      ],
+      "providers": [],
+      "sha256": "7b6f9d29fe280257b4c7d497346a231ddc3a663c938d61384faecbdd810f82be"
+    },
+    {
+      "path": "lib/features/audio_processing/data/repositories/audio_processor_repository_impl.dart",
+      "lines": 160,
+      "symbols": [
+        "AudioProcessorRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "a9d5be63b3bb0935a06c904a36d83cb8314012174e60536874d267b96b2a7ebf"
+    },
+    {
+      "path": "lib/features/audio_processing/domain/entities/waveform_data.dart",
+      "lines": 45,
+      "symbols": [
+        "WaveformData"
+      ],
+      "providers": [],
+      "sha256": "74f9ddfe25b62e66e85c629f108808ac3ca89ac75b46986d91359d5124575174"
+    },
+    {
+      "path": "lib/features/audio_processing/domain/providers/waveform_provider.dart",
+      "lines": 32,
+      "symbols": [
+        "WaveformNotifier"
+      ],
+      "providers": [
+        "audioProcessorRepositoryProvider",
+        "waveformProvider"
+      ],
+      "sha256": "4b2da8279d2cb38e18839259a11b2dce6270b8936b23344997cbaa2f1277db6a"
+    },
+    {
+      "path": "lib/features/audio_processing/domain/repositories/audio_processor_repository.dart",
+      "lines": 7,
+      "symbols": [
+        "AudioProcessorRepository"
+      ],
+      "providers": [],
+      "sha256": "a4180617975196986ec0498484e3b004c90ead6a6089828c1c3ee9dd63a4fa2e"
+    },
+    {
+      "path": "lib/features/export/presentation/export_screen.dart",
+      "lines": 410,
+      "symbols": [
+        "ExportScreen",
+        "_ExportScreenState"
+      ],
+      "providers": [],
+      "sha256": "650090654f2558c36bf0ee949ec7357328a68b0406e6f89e86e012c89cb5b0a7"
+    },
+    {
+      "path": "lib/features/media_cutter/data/services/ffmpeg_media_cutter_service.dart",
+      "lines": 1326,
+      "symbols": [
+        "CutterMediaType",
+        "CutterMode",
+        "MediaCutterCancelledException",
+        "MediaCutCommand",
+        "RemoveRange",
+        "FfmpegMediaCutterService"
+      ],
+      "providers": [],
+      "sha256": "d60c436177ffb12719bb02c840c7217a7d522af4faa9f715a105c5f3daa434e4"
+    },
+    {
+      "path": "lib/features/media_cutter/data/services/professional_audio_editor_service.dart",
+      "lines": 291,
+      "symbols": [
+        "AudioSilenceRegion",
+        "ProfessionalAudioEditorService"
+      ],
+      "providers": [],
+      "sha256": "ac627439390f3cf7fbf66ea8f31eb6f88f076ba6e51714b9fe9e53c33b0bca38"
+    },
+    {
+      "path": "lib/features/media_cutter/presentation/screens/audio_editor_screen.dart",
+      "lines": 977,
+      "symbols": [
+        "AudioEditorScreen",
+        "_AudioEditorScreenState",
+        "_DragTarget",
+        "_AudioEditSnapshot",
+        "_AudioOverlayPainter"
+      ],
+      "providers": [],
+      "sha256": "1dee35954911ab98913bb661f4524f71cd577ffcc287b940dd4eb214e20613ae"
+    },
+    {
+      "path": "lib/features/media_cutter/presentation/screens/media_cutter_screen.dart",
+      "lines": 1870,
+      "symbols": [
+        "MediaCutterScreen",
+        "_MediaCutterScreenState",
+        "_TimelineDragMode",
+        "_WaveformRangeEditor",
+        "_WaveformRangeEditorState",
+        "_WaveformRangePainter",
+        "_WaveformSplitEditor",
+        "_WaveformSplitPainter"
+      ],
+      "providers": [],
+      "sha256": "7f885a7544573c1c9a4e2fcff064eac3f83ea39489698f2e68bc7937952c3946"
+    },
+    {
+      "path": "lib/features/preview/presentation/preview_screen.dart",
+      "lines": 302,
+      "symbols": [
+        "PreviewScreen",
+        "_PreviewScreenState"
+      ],
+      "providers": [],
+      "sha256": "427af1c0fdb99519866225419984576a57cdbd5f0ce8f4428d8740b8787177e9"
+    },
+    {
+      "path": "lib/features/shorts_generator/data/datasources/ffmpeg_analysis_datasource.dart",
+      "lines": 101,
+      "symbols": [
+        "FfmpegAnalysisDatasource"
+      ],
+      "providers": [],
+      "sha256": "92432a56ac3695e93666d8960667ad1c33f1623ff69cd3f1a3ef9227cea515b8"
+    },
+    {
+      "path": "lib/features/shorts_generator/data/datasources/ffmpeg_export_datasource.dart",
+      "lines": 192,
+      "symbols": [
+        "FfmpegExportDatasource"
+      ],
+      "providers": [],
+      "sha256": "079bb7748351294a1de9c0f6609c3adb40cd3da4f516a532aa8bd1e4dba320f9"
+    },
+    {
+      "path": "lib/features/shorts_generator/data/repositories/shorts_repository_impl.dart",
+      "lines": 435,
+      "symbols": [
+        "ShortsRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "4e2431e7c58dc9ea36de79c6b97d2ce0a9333fa2860c9a8a64aa783cdd5c0e81"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/clip_suggestion.dart",
+      "lines": 22,
+      "symbols": [
+        "ClipSuggestion"
+      ],
+      "providers": [],
+      "sha256": "48266b320af05f0ce88584029ade457eb53b71e3b650144bc40050e644b1b938"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/export_settings.dart",
+      "lines": 125,
+      "symbols": [
+        "PlatformTarget",
+        "ClipDuration",
+        "CuttingMode",
+        "ExportQuality",
+        "ExportQualityLabel",
+        "ExportSettings"
+      ],
+      "providers": [],
+      "sha256": "1ea8fa0f0139b52f15d975fc8bf16d24c8a68694023e5c7c07e61639e0f7981d"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/reframe_settings.dart",
+      "lines": 65,
+      "symbols": [
+        "ReframeMode",
+        "ReframeModeLabel",
+        "ReframeSettings"
+      ],
+      "providers": [],
+      "sha256": "43bac1d1ed55c63ea14768d9039baa0fd5095a686b4611511ecf2612dac7e0cb"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/scene_info.dart",
+      "lines": 15,
+      "symbols": [
+        "SceneInfo"
+      ],
+      "providers": [],
+      "sha256": "98c773c4ee5a203d14268d0f5e1437d0a175e217b4f9faf548bde2ba4b666fa3"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/shorts_project.dart",
+      "lines": 19,
+      "symbols": [
+        "ShortsProject"
+      ],
+      "providers": [],
+      "sha256": "e12ecde220c3a93a4e29741b8a9854d9cad9a6ba61756e0e2e91b5aba4a906fb"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/entities/video_segment.dart",
+      "lines": 15,
+      "symbols": [
+        "VideoSegment"
+      ],
+      "providers": [],
+      "sha256": "2bb0ccbbb5e4b4183c9a444ef1df1051ef57471fe06c887cf6971d76e0fe573a"
+    },
+    {
+      "path": "lib/features/shorts_generator/domain/repositories/shorts_repository.dart",
+      "lines": 18,
+      "symbols": [
+        "ShortsRepository"
+      ],
+      "providers": [],
+      "sha256": "b95a7674ff8ac583cbb0555b3d67933f2818890dfa33b3a9f52e6b2be097c81c"
+    },
+    {
+      "path": "lib/features/shorts_generator/presentation/providers/shorts_provider.dart",
+      "lines": 137,
+      "symbols": [
+        "ExportSettingsNotifier",
+        "ShortsUiState",
+        "ShortsUiNotifier"
+      ],
+      "providers": [
+        "exportSettingsProvider",
+        "shortsUiProvider"
+      ],
+      "sha256": "408ec843b1a21df0689312434a41cd78116912a16545f2c22866e858d70d2871"
+    },
+    {
+      "path": "lib/features/shorts_generator/presentation/screens/export_screen.dart",
+      "lines": 125,
+      "symbols": [
+        "ShortsExportScreen"
+      ],
+      "providers": [],
+      "sha256": "8ed8f342f92ff6ec4c1730924f9b22ea61c03789690151ddfda4be5dcedce592"
+    },
+    {
+      "path": "lib/features/shorts_generator/presentation/screens/import_mode_screen.dart",
+      "lines": 464,
+      "symbols": [
+        "ImportModeScreen",
+        "_ImportModeScreenState"
+      ],
+      "providers": [],
+      "sha256": "fe825eff96b9d78830235cc11aec76cfc7809ff752119131f9e3ae2b5a1d5709"
+    },
+    {
+      "path": "lib/features/shorts_generator/presentation/screens/suggestions_screen.dart",
+      "lines": 765,
+      "symbols": [
+        "SuggestionsScreen",
+        "_ClipCard",
+        "_TemplateBadge",
+        "_EditClipDialogRoute",
+        "_EditClipScreen",
+        "_EditClipScreenState",
+        "_PreviewRoute",
+        "_PreviewScreen",
+        "_PreviewScreenState"
+      ],
+      "providers": [],
+      "sha256": "3b19c234b051e75c4e34ea29dbb97a15645c374cfd7f9f0d8637c275aa5ca194"
+    },
+    {
+      "path": "lib/features/silence_detector/data/datasources/ffmpeg_silence_datasource.dart",
+      "lines": 140,
+      "symbols": [
+        "FfmpegSilenceDatasource"
+      ],
+      "providers": [],
+      "sha256": "043cdacf4ade31683fd1e67f24784b42f43abb295fa1b73eb2896f7980596c1f"
+    },
+    {
+      "path": "lib/features/silence_detector/data/repositories/silence_detector_repository_impl.dart",
+      "lines": 112,
+      "symbols": [
+        "SilenceDetectorRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "f05b0241a797b7c9de9680655485d50d991fde0178cb21d3971d843f5a9d7b48"
+    },
+    {
+      "path": "lib/features/silence_detector/data/services/adaptive_threshold_service.dart",
+      "lines": 71,
+      "symbols": [
+        "AdaptiveThresholdService"
+      ],
+      "providers": [],
+      "sha256": "99f24bdfc23a1271d2e2c7e78a448c36516fc0b5cbc20acdba810f1f0560b567"
+    },
+    {
+      "path": "lib/features/silence_detector/data/services/breathing_protection_service.dart",
+      "lines": 43,
+      "symbols": [
+        "BreathingProtectionService"
+      ],
+      "providers": [],
+      "sha256": "2ae165f21ba886348be07dc0690923a2d6076a401804bdf4f1dcab654863ac59"
+    },
+    {
+      "path": "lib/features/silence_detector/data/services/vad_service.dart",
+      "lines": 100,
+      "symbols": [
+        "VadService"
+      ],
+      "providers": [],
+      "sha256": "fd8b88cadad4eafe0c66c353377bc183fefd596247fa64d558456449477b161a"
+    },
+    {
+      "path": "lib/features/silence_detector/domain/entities/detection_params.dart",
+      "lines": 90,
+      "symbols": [
+        "SmartZoomConfig",
+        "DetectionParams"
+      ],
+      "providers": [],
+      "sha256": "1924b009f2de942c56bd8d27fa48de7adea2e70fcaa12036479e1b55b557113d"
+    },
+    {
+      "path": "lib/features/silence_detector/domain/entities/silence_segment.dart",
+      "lines": 26,
+      "symbols": [
+        "SilenceSegment"
+      ],
+      "providers": [],
+      "sha256": "1ac162603bec61b0de1bcce73e1663322020bcbd1b1cdd5b4203ead276c30c34"
+    },
+    {
+      "path": "lib/features/silence_detector/domain/providers/silence_detection_provider.dart",
+      "lines": 118,
+      "symbols": [
+        "DetectionParamsNotifier",
+        "SilenceSegmentsNotifier"
+      ],
+      "providers": [
+        "detectionParamsProvider",
+        "silenceSegmentsProvider",
+        "hasSilenceSegmentsProvider",
+        "totalSilenceDurationProvider"
+      ],
+      "sha256": "be47ced7146c37d87304a4e601dec128c4a78e8568548fb60ce8462041faf1f0"
+    },
+    {
+      "path": "lib/features/silence_detector/domain/repositories/silence_detector_repository.dart",
+      "lines": 23,
+      "symbols": [
+        "SilenceDetectorRepository"
+      ],
+      "providers": [],
+      "sha256": "065b877a41b82bbd2d5e213f2efd4ce30e73814f0e37dbf3bd2f526680d97e02"
+    },
+    {
+      "path": "lib/features/silence_detector/presentation/editor_screen.dart",
+      "lines": 535,
+      "symbols": [
+        "EditorScreen",
+        "_EditorScreenState"
+      ],
+      "providers": [],
+      "sha256": "9783cccdc734dd7d390b2e490229dc30f5db31e41ad3a8257514e8ed6aad5f3c"
+    },
+    {
+      "path": "lib/features/silence_detector/presentation/widgets/detection_settings_panel.dart",
+      "lines": 303,
+      "symbols": [
+        "DetectionSettingsPanel",
+        "_ThresholdSlider",
+        "_MinDurationSlider",
+        "_PaddingSlider"
+      ],
+      "providers": [],
+      "sha256": "323d0468051a609df82409dbd6df32075685cd1facefa477d96001c398292d7d"
+    },
+    {
+      "path": "lib/features/silence_detector/presentation/widgets/silence_timeline.dart",
+      "lines": 140,
+      "symbols": [
+        "SilenceTimeline",
+        "_SegmentItem"
+      ],
+      "providers": [],
+      "sha256": "6e90f315d3a55f9f4e7bd4489e1898ec579f18d4eeb07e395cd0a5a57b2e5b82"
+    },
+    {
+      "path": "lib/features/silence_detector/presentation/widgets/waveform_viewer.dart",
+      "lines": 200,
+      "symbols": [
+        "WaveformViewer",
+        "_WaveformPainter"
+      ],
+      "providers": [],
+      "sha256": "d80d9655247a349da3ba0a1cdf8cf1f883c606071b5fb85ec48650ce50cee652"
+    },
+    {
+      "path": "lib/features/splash/presentation/splash_screen.dart",
+      "lines": 68,
+      "symbols": [
+        "SplashScreen",
+        "_SplashScreenState"
+      ],
+      "providers": [],
+      "sha256": "78d815615fa2e4d0d5463b6426c282c3a6cdeaf152eb9c0794ec4a3b53df22f8"
+    },
+    {
+      "path": "lib/features/video_adjustment/data/datasources/ffmpeg_adjustment_datasource.dart",
+      "lines": 189,
+      "symbols": [
+        "FfmpegAdjustmentDatasource"
+      ],
+      "providers": [],
+      "sha256": "2e3970faacd2f596b2e720bb076a0213ee33fca13ae61b1e13904e80a821ce3a"
+    },
+    {
+      "path": "lib/features/video_adjustment/data/repositories/adjustment_repository_impl.dart",
+      "lines": 99,
+      "symbols": [
+        "AdjustmentRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "cc2c3e058f9ab11fc3ddb708c76633ad947b34651b0a2ded7f4dcc11742b5f44"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/adjustment_preset.dart",
+      "lines": 118,
+      "symbols": [
+        "AdjustmentPreset"
+      ],
+      "providers": [],
+      "sha256": "115f8546ad8e702432f3e93022a445be6af0348dbdef97686d962b4dde5b64f4"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/adjustment_settings.dart",
+      "lines": 114,
+      "symbols": [
+        "AdjustmentSettings"
+      ],
+      "providers": [],
+      "sha256": "fd0a6537667d78ef8c943acdf2a3f6ef3ab99f98938291d610719fe782833cf2"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/audio_adjustment.dart",
+      "lines": 67,
+      "symbols": [
+        "AudioAdjustment"
+      ],
+      "providers": [],
+      "sha256": "102abe0a4f1220c6811dc25040ff7119f3f025f13f43aefba81aeb048a43a7fc"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/color_adjustment.dart",
+      "lines": 52,
+      "symbols": [
+        "ColorAdjustment"
+      ],
+      "providers": [],
+      "sha256": "46aa9540b041c9874c0857cdfb3479229f3ee2e2cf448fa1978156963d358e37"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/tone_adjustment.dart",
+      "lines": 42,
+      "symbols": [
+        "ToneAdjustment"
+      ],
+      "providers": [],
+      "sha256": "98a3082c602ca47002918ed32b63ee01c5c9a36bc7bd8d7284bce45d2712fdbe"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/entities/video_adjustment.dart",
+      "lines": 80,
+      "symbols": [
+        "VideoAdjustment"
+      ],
+      "providers": [],
+      "sha256": "9a27fbe8969d9c46d1fc8647022f3cddf0981e0e39d541e1ffa55acb2882428e"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/repositories/adjustment_repository.dart",
+      "lines": 24,
+      "symbols": [
+        "AdjustmentRepository"
+      ],
+      "providers": [],
+      "sha256": "cafc09485d387ce09ae7e3847e2696f92d3484810c65587c1b51fd8a5789e0d8"
+    },
+    {
+      "path": "lib/features/video_adjustment/domain/usecases/apply_adjustments_usecase.dart",
+      "lines": 72,
+      "symbols": [
+        "ApplyAdjustmentsUseCase",
+        "PreviewFrameUseCase",
+        "ExportAdjustedVideoUseCase",
+        "ApplyPresetUseCase",
+        "ApplyLutUseCase"
+      ],
+      "providers": [],
+      "sha256": "8deb67a76f69ed05baacf0501cde598c45ad0d04a9453ce028680b5866a69c0d"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/providers/adjustment_provider.dart",
+      "lines": 327,
+      "symbols": [
+        "AdjustmentNotifier"
+      ],
+      "providers": [
+        "adjustmentDatasourceProvider",
+        "adjustmentRepositoryProvider",
+        "adjustmentProvider"
+      ],
+      "sha256": "1dccd9d932929978a3a1719895d797d9c2f9c7caf243636b0e16af3e5b5df74c"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/providers/export_provider.dart",
+      "lines": 90,
+      "symbols": [
+        "ExportNotifier",
+        "ExportState"
+      ],
+      "providers": [
+        "exportProvider"
+      ],
+      "sha256": "46986ed5148574eb2f6263bcab031659dc93345f1a4dc6e2afd8bea6b2f1d279"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/providers/preview_provider.dart",
+      "lines": 80,
+      "symbols": [
+        "PreviewNotifier",
+        "PreviewState"
+      ],
+      "providers": [
+        "previewProvider"
+      ],
+      "sha256": "0a0295253c3ac20bc0af1ccf8bab4a68071284e58db561ba33a1e28ef1ab5213"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/providers/undo_redo_provider.dart",
+      "lines": 86,
+      "symbols": [
+        "UndoRedoNotifier",
+        "UndoRedoState"
+      ],
+      "providers": [
+        "undoRedoProvider"
+      ],
+      "sha256": "8b79e143d742736eb235d3d85e2a9fc2bf9447060ada9a1a8d8ade24cb87ccc6"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/screens/adjustment_screen.dart",
+      "lines": 358,
+      "symbols": [
+        "AdjustmentScreen",
+        "_AdjustmentScreenState",
+        "ExportQualitySelector",
+        "_ExportQualitySelectorState"
+      ],
+      "providers": [],
+      "sha256": "9d20c9bb32bae861588a5fe1747eaf3ddfbb23c6b93c12aadba39f62d2dc488d"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/adjustment_slider.dart",
+      "lines": 115,
+      "symbols": [
+        "AdjustmentSlider"
+      ],
+      "providers": [],
+      "sha256": "bd93795752d13644c8ec27c7a2478285f88826c3febaa1fbb9023d951f2aa711"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/audio_adjustments_panel.dart",
+      "lines": 39,
+      "symbols": [
+        "AudioAdjustmentsPanel"
+      ],
+      "providers": [],
+      "sha256": "2dbeece7e0cf19b1fa4feee153aa47668675adfcb2ccd006307bb16694b3a2a4"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/basic_adjustments_panel.dart",
+      "lines": 98,
+      "symbols": [
+        "BasicAdjustmentsPanel"
+      ],
+      "providers": [],
+      "sha256": "6f62b51b5ee4a7878235755078c5f4f3ec3bcd58da10a6b6275403a7ba8e231e"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/before_after_toggle.dart",
+      "lines": 63,
+      "symbols": [
+        "BeforeAfterToggle"
+      ],
+      "providers": [],
+      "sha256": "5612b33cd0cb8b3e7359785aa97516ec7c40ded14c00e809e7c3108eeb1031b2"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/color_adjustments_panel.dart",
+      "lines": 34,
+      "symbols": [
+        "ColorAdjustmentsPanel"
+      ],
+      "providers": [],
+      "sha256": "fd660273627a1dfa66f5a47a17334ee68b819e74096f27d69eec849018f1920d"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/effects_panel.dart",
+      "lines": 32,
+      "symbols": [
+        "EffectsPanel"
+      ],
+      "providers": [],
+      "sha256": "fcaf39ffa12a5b7a05113110b8b23bef267e2970aad46ea5332f3bafdecdbfeb"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/lut_panel.dart",
+      "lines": 130,
+      "symbols": [
+        "LutPanel",
+        "_LutInfo",
+        "_LutTile"
+      ],
+      "providers": [],
+      "sha256": "83cbe73cfcf99dd0e49ec3dcf8a70357228741ea0236a64903bb00019da685b3"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/presets_row.dart",
+      "lines": 96,
+      "symbols": [
+        "PresetsRow"
+      ],
+      "providers": [],
+      "sha256": "0d2344ca2fb5cef177a266fb4a5b6f4a2934648c6ebed009d1f9710761c63153"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/tone_adjustments_panel.dart",
+      "lines": 32,
+      "symbols": [
+        "ToneAdjustmentsPanel"
+      ],
+      "providers": [],
+      "sha256": "04c755e2d6d81c2d024c2c276cbf0aa9729d1117a8382e0a965e5c4810f4074a"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/undo_redo_bar.dart",
+      "lines": 60,
+      "symbols": [
+        "UndoRedoBar"
+      ],
+      "providers": [],
+      "sha256": "a98617100810c9a2718b41507a4362ca50b757a5bb456af1653b5b94b2099c65"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/video_adjustments_panel.dart",
+      "lines": 86,
+      "symbols": [
+        "VideoAdjustmentsPanel"
+      ],
+      "providers": [],
+      "sha256": "cabbe43bb5be274e74216ec01c0d7b6e13608dd21811009022a581fe296cb8ff"
+    },
+    {
+      "path": "lib/features/video_adjustment/presentation/widgets/video_preview_widget.dart",
+      "lines": 121,
+      "symbols": [
+        "VideoPreviewWidget"
+      ],
+      "providers": [],
+      "sha256": "598d8e6bb3a009ae2753c58cf1d3fbd3e37678c3c67832aad49ea1ec72374253"
+    },
+    {
+      "path": "lib/features/video_enhancement/data/datasources/ffmpeg_enhancement_datasource.dart",
+      "lines": 197,
+      "symbols": [
+        "FfmpegEnhancementDatasource"
+      ],
+      "providers": [],
+      "sha256": "bab0336218d5ad6e2bd79477d28da339b5f0c516edd0a528e3ae54a358b45461"
+    },
+    {
+      "path": "lib/features/video_enhancement/data/datasources/preview_generator_datasource.dart",
+      "lines": 144,
+      "symbols": [
+        "PreviewGeneratorDatasource"
+      ],
+      "providers": [],
+      "sha256": "fda8e945935a3263610b03fbeba1cd14a8211486dfe1e466cee5b96e56e79e11"
+    },
+    {
+      "path": "lib/features/video_enhancement/data/datasources/professional_enhancement_command_builder.dart",
+      "lines": 236,
+      "symbols": [
+        "ProfessionalEnhancementCommandBuilder"
+      ],
+      "providers": [],
+      "sha256": "25abc1444b11bfda612ea101c69255bf7c7b52419ca723d7a51a7856d2eed77d"
+    },
+    {
+      "path": "lib/features/video_enhancement/data/datasources/video_analyzer_datasource.dart",
+      "lines": 201,
+      "symbols": [
+        "VideoAnalyzerDatasource"
+      ],
+      "providers": [],
+      "sha256": "8c53651543ea0488d6ea9004136b3f58a054ff5fb44aec55f2b3ee7f9d107273"
+    },
+    {
+      "path": "lib/features/video_enhancement/data/repositories/enhancement_repository_impl.dart",
+      "lines": 108,
+      "symbols": [
+        "EnhancementRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "a81e30f66f9f4d4e0f9a2da3f6eede08acc1d69b72fe43f30d89f15633082402"
+    },
+    {
+      "path": "lib/features/video_enhancement/domain/entities/enhancement_plan.dart",
+      "lines": 162,
+      "symbols": [
+        "EnhancementLevel",
+        "EnhancementAction",
+        "EnhancementPlan"
+      ],
+      "providers": [],
+      "sha256": "1c98c9c8ac84f54e5200cc4d12e90539e5077b4a06291685dce32689ec9523bc"
+    },
+    {
+      "path": "lib/features/video_enhancement/domain/entities/enhancement_result.dart",
+      "lines": 109,
+      "symbols": [
+        "EnhancementResult",
+        "EnhancementStageResult",
+        "PreviewFrame"
+      ],
+      "providers": [],
+      "sha256": "6d38b07c178e802a3086c31ef80bddda77938fa3938486b63d6de7ecec49910d"
+    },
+    {
+      "path": "lib/features/video_enhancement/domain/entities/enhancement_settings.dart",
+      "lines": 97,
+      "symbols": [
+        "EnhancementSettings"
+      ],
+      "providers": [],
+      "sha256": "f26b43262c0cf19ea90063b283900ac2fce6f6489d77f797855add2af9698e53"
+    },
+    {
+      "path": "lib/features/video_enhancement/domain/entities/video_analysis_result.dart",
+      "lines": 139,
+      "symbols": [
+        "VideoQualityIssue",
+        "VideoMetadata",
+        "VideoQualityAnalysis",
+        "VideoAnalysisResult"
+      ],
+      "providers": [],
+      "sha256": "414cffbaab9cca52c3315a89aea0386251507bc5ba2fa34f4d8d2110771da556"
+    },
+    {
+      "path": "lib/features/video_enhancement/domain/repositories/enhancement_repository.dart",
+      "lines": 45,
+      "symbols": [
+        "EnhancementRepository",
+        "EnhancementProgress"
+      ],
+      "providers": [],
+      "sha256": "b58ef3cce7ee22d694b3d64cbe38e9b13fb83ede3b393fce02b6d817f657b0ad"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/providers/enhancement_provider.dart",
+      "lines": 301,
+      "symbols": [
+        "EnhancementScreen",
+        "EnhancementState",
+        "EnhancementNotifier",
+        "EnhancementPlanCopyWith"
+      ],
+      "providers": [
+        "enhancementProvider"
+      ],
+      "sha256": "03169e45cbe9d00b2737f431c5dc6a5a7f6341108e547d365f95b04f82ca7804"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/analysis_screen.dart",
+      "lines": 115,
+      "symbols": [
+        "AnalysisScreen"
+      ],
+      "providers": [],
+      "sha256": "24d1e855ad827c82d223ed5af5b019fa2bd6df538a82e4122b74a3b2ae51e8a8"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/enhancement_home_screen.dart",
+      "lines": 83,
+      "symbols": [
+        "EnhancementHomeScreen",
+        "_EnhancementHomeScreenState"
+      ],
+      "providers": [],
+      "sha256": "236fdb456ccab04cd3657ce6dd9826409d8ffce5910a2a8787fd19d2e0273329"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/import_screen.dart",
+      "lines": 81,
+      "symbols": [
+        "ImportScreen"
+      ],
+      "providers": [],
+      "sha256": "4104a719601d844010cf08bbdf3e249885b42dec0ed6bbf0d36fa084949073fc"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/plan_screen.dart",
+      "lines": 314,
+      "symbols": [
+        "PlanScreen"
+      ],
+      "providers": [],
+      "sha256": "0335229b2b6c0379ba6c285c2969bae96e0c6d8b0f7c59d041d3ff29debaa251"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/preview_screen.dart",
+      "lines": 162,
+      "symbols": [
+        "PreviewScreen"
+      ],
+      "providers": [],
+      "sha256": "19c914cec68113a0ddaf6e36438ba47e4862c28d2bb58641f7b9dd816978e775"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/processing_screen.dart",
+      "lines": 122,
+      "symbols": [
+        "ProcessingScreen"
+      ],
+      "providers": [],
+      "sha256": "cf18c89f7392e0feecb43c19b17850e638923fa6e8553d7c07ff6c8dd6860a38"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/screens/result_screen.dart",
+      "lines": 228,
+      "symbols": [
+        "ResultScreen",
+        "_ResultScreenState"
+      ],
+      "providers": [],
+      "sha256": "970de798d58f2e41fef6fc45f88082959cfc767cc1c1be0f6af0bfa48e1dd934"
+    },
+    {
+      "path": "lib/features/video_enhancement/presentation/widgets/split_comparison_widget.dart",
+      "lines": 148,
+      "symbols": [
+        "SplitComparisonWidget",
+        "_SplitComparisonWidgetState",
+        "_SliderClipper"
+      ],
+      "providers": [],
+      "sha256": "cf884ad80489df0d9d8de55cf3e3a3f05faf7a3550f8a2becef21fd295abb465"
+    },
+    {
+      "path": "lib/features/video_import/data/repositories/video_import_repository_impl.dart",
+      "lines": 107,
+      "symbols": [
+        "VideoImportRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "a857f6cc5b30e9e5bdd5bfe31bb83126ff12c4434bde71234872438037e28955"
+    },
+    {
+      "path": "lib/features/video_import/domain/entities/video_file.dart",
+      "lines": 43,
+      "symbols": [
+        "VideoFile"
+      ],
+      "providers": [],
+      "sha256": "fb21f3339387259c82691f02e435c4929583b9f872f66d97c646e95cb9f3a27f"
+    },
+    {
+      "path": "lib/features/video_import/domain/providers/video_import_provider.dart",
+      "lines": 17,
+      "symbols": [],
+      "providers": [
+        "videoImportRepositoryProvider",
+        "videoImportProvider"
+      ],
+      "sha256": "2373131eec4a5f591b0825d7e9e0d55e07225fc580b514ed0769521a8d503707"
+    },
+    {
+      "path": "lib/features/video_import/domain/repositories/video_import_repository.dart",
+      "lines": 7,
+      "symbols": [
+        "VideoImportRepository"
+      ],
+      "providers": [],
+      "sha256": "ca809fcc7303f3e1903f16e65d60eee7b4475368ea97554dd0b11bf04e93ce92"
+    },
+    {
+      "path": "lib/features/video_import/presentation/home_screen.dart",
+      "lines": 818,
+      "symbols": [
+        "HomeScreen",
+        "_HomeScreenState"
+      ],
+      "providers": [],
+      "sha256": "f8d9d810446bc784b12b559e50630cb594a44908b033d83241188ea70cc64bcc"
+    },
+    {
+      "path": "lib/features/video_import/presentation/widgets/feature_card.dart",
+      "lines": 122,
+      "symbols": [
+        "FeatureCard"
+      ],
+      "providers": [],
+      "sha256": "c764d468e81035cbb6b260cbaa2cb2075d1fba710b8ef4e40bcacc7683738721"
+    },
+    {
+      "path": "lib/features/video_import/presentation/widgets/import_button.dart",
+      "lines": 40,
+      "symbols": [
+        "ImportButton"
+      ],
+      "providers": [],
+      "sha256": "07a1f75a9865e236d1b28fd445f296006941d6c052048807c06ac4605439dc6f"
+    },
+    {
+      "path": "lib/features/video_import/presentation/widgets/video_info_card.dart",
+      "lines": 100,
+      "symbols": [
+        "VideoInfoCard"
+      ],
+      "providers": [],
+      "sha256": "f41c77394dbaa0640ad10960c5a41c2dfac357fbdb526d708b7b7d8458c94dc2"
+    },
+    {
+      "path": "lib/features/video_processing/data/repositories/video_processor_repository_impl.dart",
+      "lines": 129,
+      "symbols": [
+        "VideoProcessorRepositoryImpl"
+      ],
+      "providers": [],
+      "sha256": "54f9c747a8104f78fa3f187030718bfd7c5b3a309c0eb0507e98efb36b5160d4"
+    },
+    {
+      "path": "lib/features/video_processing/data/services/ffmpeg_cutting_service.dart",
+      "lines": 322,
+      "symbols": [
+        "FfmpegCuttingService"
+      ],
+      "providers": [],
+      "sha256": "e365d14143f0702a27066a96c345eef6d7ee62c7d6fe81f580b28d613b8ab5e7"
+    },
+    {
+      "path": "lib/features/video_processing/data/services/ffmpeg_smart_zoom_service.dart",
+      "lines": 20,
+      "symbols": [
+        "FfmpegSmartZoomService"
+      ],
+      "providers": [],
+      "sha256": "eac8a0e71b64b27dc88d4ff7d48507789d7b56cad3c03ed3a556b9cb63b4c144"
+    },
+    {
+      "path": "lib/features/video_processing/domain/entities/export_params.dart",
+      "lines": 19,
+      "symbols": [
+        "ExportParams"
+      ],
+      "providers": [],
+      "sha256": "061616e2ebf9144b99e915b5262903c1ccf201cfa193ba52466b4c942496752a"
+    },
+    {
+      "path": "lib/features/video_processing/domain/providers/processing_provider.dart",
+      "lines": 108,
+      "symbols": [
+        "ProcessingStateModel",
+        "ProcessingNotifier"
+      ],
+      "providers": [
+        "videoProcessorRepositoryProvider",
+        "processingStateProvider"
+      ],
+      "sha256": "9fcaa904e6d14da9bd98166012918304c6516889c1ef0f2f78fd31aa738e3c7a"
+    },
+    {
+      "path": "lib/features/video_processing/domain/repositories/video_processor_repository.dart",
+      "lines": 27,
+      "symbols": [
+        "VideoProcessorRepository"
+      ],
+      "providers": [],
+      "sha256": "244da07dd1590a5953af3ed29cbbb0f0c24ed05e34feef3b02b4e773e9ace20d"
+    },
+    {
+      "path": "lib/features/video_processing/presentation/processing_screen.dart",
+      "lines": 159,
+      "symbols": [
+        "ProcessingScreen"
+      ],
+      "providers": [],
+      "sha256": "f33b3875478036f7b53e2946819d8718587588c35c99889948b8fd841ab5a72b"
+    },
+    {
+      "path": "lib/main.dart",
+      "lines": 21,
+      "symbols": [],
+      "providers": [],
+      "sha256": "2617e41338bdda824e2e88dd2dee506756d1bfadd6b41f3221af85bbb75119af"
+    },
+    {
+      "path": "lib/shared/widgets/app_scaffold.dart",
+      "lines": 42,
+      "symbols": [
+        "AppScaffold"
+      ],
+      "providers": [],
+      "sha256": "a9a0e8cfa36c459ee73123e0f62f9e40ac89dce49657a05e4808f9ba158a56f6"
+    },
+    {
+      "path": "lib/shared/widgets/error_dialog.dart",
+      "lines": 62,
+      "symbols": [
+        "ErrorDialog"
+      ],
+      "providers": [],
+      "sha256": "e1c39fa5118436f651a2063505151ded11d3a0f7112ffe3dead7e9b084ff6526"
+    },
+    {
+      "path": "lib/shared/widgets/loading_overlay.dart",
+      "lines": 41,
+      "symbols": [
+        "LoadingOverlay"
+      ],
+      "providers": [],
+      "sha256": "29446f7437ec27a0e35ca14108eebee61823cff8103d295c7121652339a5ab2a"
+    },
+    {
+      "path": "lib/shared/widgets/permission_handler_widget.dart",
+      "lines": 66,
+      "symbols": [
+        "PermissionHandlerWidget"
+      ],
+      "providers": [],
+      "sha256": "ff25fcdd4b7c80cf8e53d3bed9fff1c73e9024c41fbffa0f1cee6c7348b8e985"
+    },
+    {
+      "path": "test/audio_enhancement_test.dart",
+      "lines": 61,
+      "symbols": [],
+      "providers": [],
+      "sha256": "6cbe79d450f48f6ef33a864262364626d2ddf7c0ec8d540a745266b44fd9ca8c"
+    },
+    {
+      "path": "test/audio_preview_command_test.dart",
+      "lines": 41,
+      "symbols": [],
+      "providers": [],
+      "sha256": "4bd92fb658acb803844dc1aad0932cb86d132f061a835afccdfc5bb370be2051"
+    },
+    {
+      "path": "test/media_cutter_command_test.dart",
+      "lines": 1000,
+      "symbols": [],
+      "providers": [],
+      "sha256": "39eee8c3827ead9fdda22821961d1029ac9e6f613108492ad220172483659bdc"
+    },
+    {
+      "path": "test/professional_audio_editor_service_test.dart",
+      "lines": 75,
+      "symbols": [],
+      "providers": [],
+      "sha256": "f12ed38bc32d35d7c587ba3f41f0df75065f659b7f1bf40f838e6355193f0373"
+    },
+    {
+      "path": "test/video_download_service_test.dart",
+      "lines": 110,
+      "symbols": [],
+      "providers": [],
+      "sha256": "89008bd63d115c5589760078c26ec56a047869510998e7a823fe79f9599ea1cf"
+    },
+    {
+      "path": "test/video_enhancement_command_test.dart",
+      "lines": 36,
+      "symbols": [],
+      "providers": [],
+      "sha256": "62ddcd79a72405bb6ff67bd5cf1d5b24a1bda01b196b0f710ebc029593ec552d"
+    },
+    {
+      "path": "test/video_import_metadata_test.dart",
+      "lines": 15,
+      "symbols": [],
+      "providers": [],
+      "sha256": "b6dbabc24b07964bba3a63ab89f043a0a8c6bdb4a0f8e3044955a9a5c87a90fd"
+    },
+    {
+      "path": "test/widget_test.dart",
+      "lines": 11,
+      "symbols": [],
+      "providers": [],
+      "sha256": "a9dfa8da6256e0e91331b86dd82512ee1c8c8d33d711d82ed2472f90e7f950f4"
+    }
+  ],
+  "config_hashes": {
+    "pubspec.yaml": "d836f037cb17e1f2ea1cffb37b3f2a5d31796a46788e46ba96fb6724cf845be7",
+    "pubspec.lock": "2c8344328afa3010a038261e3588dd609193f4c902759ac5f3f71a631dd10c91",
+    "analysis_options.yaml": "e0ea485cfdbc3e12b93efb8679a5ea73ebfe20ea4ca0c473dc594fc2fb274ed5",
+    "android/app/build.gradle.kts": "2d32a69969c710b5b85ae661e02233ea561de576303056965a91cb09f667be9e",
+    "android/app/src/main/AndroidManifest.xml": "127eeef51d886059b1e25ad632834a2932aaa54d0b169b94d2603f0b1c772889",
+    "ios/Runner/Info.plist": "0ab8e0f6598ed2699838dc62d90c38bc8f5024e5be335c28774aa8e7855532da"
+  }
+}

@@ -1,0 +1,4 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/silence_characterization_test.dart
+00:00 +0: SR-08 (open, batch C): valid 100ms WAV crashes VAD percentile indexing
+00:00 +1: SR-12 (open, batch B): cancellation is overwritten by late completion
+00:00 +2: All tests passed!

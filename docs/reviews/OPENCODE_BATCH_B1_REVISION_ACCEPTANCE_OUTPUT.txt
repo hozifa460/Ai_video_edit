@@ -1,0 +1,25 @@
+﻿B1 revision acceptance runs (OpenCode, 2026-10-22)
+command: flutter test --no-pub docs/reviews/repro/<file> --reporter compact
+
+== codex_batch_b1_acceptance_test.dart ==
+00:03 +10: All tests passed!
+
+== codex_batch01_acceptance_test.dart ==
+00:02 +7: All tests passed!
+
+== codex_batch01_final_waveform_test.dart ==
+00:02 +2: All tests passed!
+
+== codex_batch01_revision_offsets_test.dart ==
+00:01 +3: All tests passed!
+
+== codex_sr06_acceptance_test.dart ==
+00:01 +5: All tests passed!
+
+== codex_sr06_timestamp_precision_test.dart ==
+00:01 +5: All tests passed!
+
+== silence_characterization_test.dart ==
+00:02 +2: All tests passed!
+
+total acceptance cases run: 34

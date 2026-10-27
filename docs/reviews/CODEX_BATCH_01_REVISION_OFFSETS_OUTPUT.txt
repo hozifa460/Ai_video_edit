@@ -1,0 +1,32 @@
+00:00 +0: loading C:/projectapps/Ai_video_edit-main/Ai_video_edit-main/docs/reviews/repro/codex_batch01_revision_offsets_test.dart
+00:00 +0: B01-R1 follow-up: long pre-roll must retain the measured origin
+00:00 +0 -1: B01-R1 follow-up: long pre-roll must retain the measured origin [E]
+  Expected: [SilenceSegment:SilenceSegment(1.0, 2.0)]
+    Actual: [SilenceSegment:SilenceSegment(3.0, 4.0)]
+     Which: at location [0] is SilenceSegment:<SilenceSegment(3.0, 4.0)> instead of SilenceSegment:<SilenceSegment(1.0, 2.0)>
+  The offset is -12, even though the video lasts only 10 seconds.
+  
+  package:matcher                                                   expect
+  package:flutter_test/src/widget_tester.dart 473:18                expect
+  docs\reviews\repro\codex_batch01_revision_offsets_test.dart 14:5  main.<fn>
+  
+00:00 +0 -1: B01-R1 follow-up: audio entirely before video contributes no removal
+00:00 +0 -2: B01-R1 follow-up: audio entirely before video contributes no removal [E]
+  Expected: empty
+    Actual: [SilenceSegment:SilenceSegment(0.0, 1.0)]
+  The true range [-2,-1] is outside video; do not invent [0,1].
+  
+  package:matcher                                                   expect
+  package:flutter_test/src/widget_tester.dart 473:18                expect
+  docs\reviews\repro\codex_batch01_revision_offsets_test.dart 29:5  main.<fn>
+  
+00:00 +0 -2: B01-R1 follow-up: delayed audio retains its origin beyond video end
+00:00 +0 -3: B01-R1 follow-up: delayed audio retains its origin beyond video end [E]
+  Expected: <12>
+    Actual: <10.0>
+  
+  package:matcher                                                   expect
+  package:flutter_test/src/widget_tester.dart 473:18                expect
+  docs\reviews\repro\codex_batch01_revision_offsets_test.dart 44:5  main.<fn>
+  
+00:00 +0 -3: Some tests failed.
