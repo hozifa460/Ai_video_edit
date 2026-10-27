@@ -472,3 +472,11 @@ Android يستخدم Java/Kotlin target 17، SDK versions موروثة من Flut
 - Checks run: flutter analyze --no-pub (No issues found), flutter test --no-pub (349 tests passed).
 - Limitations: Native FFmpeg/device playback/export not validated in this environment.
 - Status: Implemented � awaiting review.
+
+### 2026-10-27 (2) - OpenCode - Release build: R8/FFprobe import fallback + APK size
+
+- Scope: android/app (proguard + gradle), video_import repository, editor probe fallback, GitHub Actions workflow.
+- Changes: added android/app/proguard-rules.pro keeping com.arthenica / com.antonkarpenko / com.google.mlkit; release buildType now isMinifyEnabled = false, isShrinkResources = false, proguardFiles(...) (packaging jniLibs.useLegacyPackaging = true already present); VideoImportRepositoryImpl.getVideoMetadata wraps FFprobeKit in try/catch and falls back to VideoPlayerController.file metadata, then to a zero-duration Success(VideoFile) so an existing file is never blocked; EditorScreen._probeTimeline fallback timeline now uses hasAudio: true and audioDurationSeconds: _playerDurationSeconds(); workflow builds --split-per-abi --target-platform android-arm64 --no-shrink --no-tree-shake-icons and publishes app-arm64-v8a-release.apk as ai-video-edit-latest.apk on tag latest.
+- Checks run: flutter analyze --no-pub (No issues found), flutter test --no-pub (349 tests passed), flutter build apk --release --no-shrink flag verified accepted by Flutter 3.38.3 (unknown flags error immediately; this one does not).
+- Limitations: No Gradle/APK build and no device install tested here; native Release import still needs a device check.
+- Status: Implemented - awaiting review.

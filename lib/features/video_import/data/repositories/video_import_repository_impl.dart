@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/media_information.dart';
 import 'package:ffmpeg_kit_flutter_new/stream_information.dart';
+import 'package:video_player/video_player.dart';
 import '../../../../core/errors/failures.dart';
 import '../../../../core/utils/logger.dart';
 import '../../../../core/utils/result.dart';
@@ -49,13 +51,24 @@ class VideoImportRepositoryImpl implements VideoImportRepository {
       final fileName = path.split(Platform.pathSeparator).last;
       final format = fileName.split('.').last.toLowerCase();
 
-      final info = await FFprobeKit.getMediaInformation(path);
-      final mediaInfo = info.getMediaInformation();
+      // FFprobeKit can be null/throw in Release builds when R8 strips its JNI
+      // bridge classes. A probe failure must never block importing a file that
+      // exists: fall back to the video player, then to bare metadata.
+      MediaInformation? mediaInfo;
+      try {
+        final info = await FFprobeKit.getMediaInformation(path);
+        mediaInfo = info.getMediaInformation();
+      } catch (e, stack) {
+        AppLogger().e('FFprobeKit failed for $path', e, stack);
+        mediaInfo = null;
+      }
+
       if (mediaInfo == null) {
-        return AppError(
-          const CorruptedFileFailure(
-            message: 'Could not read media information',
-          ),
+        return _fallbackMetadata(
+          path: path,
+          fileSize: fileSize,
+          fileName: fileName,
+          format: format,
         );
       }
 
@@ -97,6 +110,56 @@ class VideoImportRepositoryImpl implements VideoImportRepository {
     } catch (e, stack) {
       AppLogger().e('Failed to get video metadata', e, stack);
       return AppError(VideoImportFailure(message: e.toString()));
+    }
+  }
+
+  /// Release-mode fallback when FFprobe is unavailable (stripped JNI classes).
+  ///
+  /// Order: video player metadata → bare "file exists" metadata. An existing
+  /// video must never be blocked from importing.
+  Future<Result<VideoFile>> _fallbackMetadata({
+    required String path,
+    required int fileSize,
+    required String fileName,
+    required String format,
+  }) async {
+    VideoPlayerController? controller;
+    try {
+      controller = VideoPlayerController.file(File(path));
+      await controller.initialize();
+      final value = controller.value;
+      return Success(
+        VideoFile(
+          path: path,
+          fileName: fileName,
+          fileSize: fileSize,
+          duration: value.duration,
+          width: value.size.width.toInt(),
+          height: value.size.height.toInt(),
+          fps: 30.0,
+          format: format,
+          hasAudio: true,
+        ),
+      );
+    } catch (e, stack) {
+      AppLogger().e('Metadata fallback failed for $path', e, stack);
+      return Success(
+        VideoFile(
+          path: path,
+          fileName: fileName,
+          fileSize: fileSize,
+          duration: Duration.zero,
+          width: 0,
+          height: 0,
+          fps: 30.0,
+          format: format,
+          hasAudio: true,
+        ),
+      );
+    } finally {
+      try {
+        await controller?.dispose();
+      } catch (_) {}
     }
   }
 

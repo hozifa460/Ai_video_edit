@@ -188,9 +188,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       AppLogger().e(
         'Media probe failed: ${(result as AppError<MediaTimeline>).error.message}',
       );
+      // A probe that fails in Release (stripped FFprobe JNI classes) must not
+      // gate silence detection: assume audio exists and use the player's own
+      // duration so SilenceDetectionGate stays open.
       timeline = MediaTimeline.probed(
         videoDurationSeconds: _playerDurationSeconds(),
-        hasAudio: false,
+        audioDurationSeconds: _playerDurationSeconds(),
+        hasAudio: true,
       );
     }
 
