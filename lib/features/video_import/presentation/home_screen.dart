@@ -571,6 +571,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  void _openAutoReframe() {
+    if (_videoFile == null) return;
+    Navigator.of(
+      context,
+    ).pushNamed(AppRouter.autoReframe, arguments: _videoFile!.path);
+  }
+
   void _resumeDraft(DraftData draft) {
     Navigator.of(
       context,
@@ -667,6 +674,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       Color(0xFF4A42D4),
                     ],
                     onTap: _openSilenceRemover,
+                    disabled: _videoFile == null,
+                  ),
+                  FeatureCard(
+                    icon: Icons.face_retouching_natural,
+                    title: 'Auto\nReframe',
+                    subtitle: 'Smart face tracking for 9:16, 16:9 & more',
+                    gradientColors: const [
+                      Color(0xFFE040FB),
+                      Color(0xFF9C27B0),
+                    ],
+                    onTap: _openAutoReframe,
                     disabled: _videoFile == null,
                   ),
                   FeatureCard(

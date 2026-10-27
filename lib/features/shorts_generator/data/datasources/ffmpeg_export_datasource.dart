@@ -123,11 +123,11 @@ class FfmpegExportDatasource {
             final tEnd = ((i + 1) * perSample).toStringAsFixed(3);
             final tStart = (i * perSample).toStringAsFixed(3);
             if (i == 0) {
-              buf.write('max(0\\, min(iw-$cropW\\, if(lte(t\\,$tEnd)\\, $x0+($x1-$x0)*(t-$tStart)/$perSample');
+              buf.write('max(0\\, min(iw-$cropW\\, if(lte(t\\,$tEnd)\\, $x0+($x1-$x0)*(t-$tStart)/$perSample-($cropW)/2');
             } else if (i < segments - 1) {
-              buf.write('\\, if(lte(t\\,$tEnd)\\, $x0+($x1-$x0)*(t-$tStart)/$perSample');
+              buf.write('\\, if(lte(t\\,$tEnd)\\, $x0+($x1-$x0)*(t-$tStart)/$perSample-($cropW)/2');
             } else {
-              buf.write('\\, $x0+($x1-$x0)*(t-$tStart)/$perSample');
+              buf.write('\\, $x0+($x1-$x0)*(t-$tStart)/$perSample-($cropW)/2');
             }
           }
           final closeCount = segments >= 2 ? segments + 1 : 3;

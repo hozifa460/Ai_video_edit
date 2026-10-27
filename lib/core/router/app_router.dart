@@ -13,6 +13,7 @@ import '../../features/video_enhancement/presentation/screens/enhancement_home_s
 import '../../features/audio_enhancement/presentation/screens/audio_enhancement_screen.dart';
 import '../../features/media_cutter/presentation/screens/audio_editor_screen.dart';
 import '../../features/media_cutter/presentation/screens/media_cutter_screen.dart';
+import '../../features/auto_reframe/presentation/screens/auto_reframe_screen.dart';
 
 class AppRouter {
   AppRouter._();
@@ -30,6 +31,7 @@ class AppRouter {
   static const String enhancement = '/enhancement';
   static const String audioEnhance = '/audio-enhance';
   static const String mediaCutter = '/media-cutter';
+  static const String autoReframe = '/auto-reframe';
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -104,6 +106,11 @@ class AppRouter {
             hasAudio: args['hasAudio'] as bool? ?? true,
             duration: args['duration'] as Duration?,
           ),
+        );
+      case autoReframe:
+        final videoPath = settings.arguments as String;
+        return MaterialPageRoute(
+          builder: (_) => AutoReframeScreen(videoPath: videoPath),
         );
       default:
         return MaterialPageRoute(
