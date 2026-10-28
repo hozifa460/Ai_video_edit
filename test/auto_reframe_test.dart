@@ -116,12 +116,12 @@ void main() {
 
     test('a speaker genuinely traveling across one shot keeps smooth '
         'keyframes', () {
-      // One continuous segment with a large, gradual sweep (>0.14 travel):
+      // One continuous segment with a large, gradual sweep (>0.20 travel):
       // the collapse must NOT fire, intermediate keyframes stay smooth.
       final raw = List<FaceTrackPoint>.generate(30, (i) {
         return FaceTrackPoint(
           timeSec: i * 0.5,
-          normX: 0.35 + i * 0.015,
+          normX: 0.2 + i * 0.04,
           normY: 0.45,
         );
       });
@@ -658,6 +658,190 @@ void main() {
 
       expect(subject, isNotNull);
       expect(subject!.sceneChanged, isTrue);
+    });
+  });
+
+  group('speaker-switch instant cuts (25+ cuts)', () {
+    test('adjacent switches of 0.14-0.16 are isCut even with 25+ cuts', () {
+      // 26 alternating shots at x = 0.52 / 0.68 (delta 0.16), ~4 samples
+      // each — a realistic 2-minute multi-speaker interview.
+      final raw = <FaceTrackPoint>[];
+      for (var shot = 0; shot < 26; shot++) {
+        final x = shot.isEven ? 0.52 : 0.68;
+        for (var j = 0; j < 4; j++) {
+          raw.add(
+            FaceTrackPoint(
+              timeSec: (shot * 4 + j) * 0.25,
+              normX: x,
+              normY: 0.45,
+            ),
+          );
+        }
+      }
+
+      final keyframes = FaceDetectionService.buildKeyframes(raw);
+
+      // Every transition between the two speakers must be an instant cut,
+      // never a multi-second crawl — even with 25+ cuts in the video.
+      for (var i = 1; i < keyframes.length; i++) {
+        final dx = (keyframes[i].normX - keyframes[i - 1].normX).abs();
+        if (dx >= 0.14) {
+          expect(
+            keyframes[i].isCut,
+            isTrue,
+            reason: 'switch at ${keyframes[i].timeSec}s (dx=$dx) must be '
+                'an instant cut, not a smooth pan',
+          );
+        }
+      }
+      expect(
+        keyframes.where((k) => k.isCut).length,
+        greaterThanOrEqualTo(20),
+        reason: 'a 26-shot interview must yield many cut keyframes',
+      );
+    });
+  });
+
+  group('silhouette thin-stripe stripping & medium shots', () {
+    test('thin vertical black wall stripes do not pull normX off the head',
+        () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      // Bright studio background.
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Seated pitch-black silhouette on the right.
+      for (var gy = 8; gy <= 34; gy++) {
+        for (var gx = 48; gx <= 64; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+      // A 1-cell-wide vertical black wall molding / mic boom arm to the
+      // LEFT of the speaker — must be stripped before clustering so it
+      // cannot drag normX toward the empty wall.
+      for (var gy = 0; gy < h; gy++) {
+        final o = (gy * w + 40) * 4;
+        rgba[o] = 8;
+        rgba[o + 1] = 8;
+        rgba[o + 2] = 8;
+      }
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+
+      expect(subject, isNotNull);
+      // Head stays centered on the silhouette, not pulled to gx=40.
+      expect(subject!.normX, closeTo((56 + 0.5) / w, 0.03));
+    });
+
+    test('a medium-shot silhouette (~3.5% of the grid) is detected', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // ~130 cells = 3.6% of the 80x45 grid: a medium 16:9 two-person shot
+      // of the masked speaker. Must pass the lowered 2.8% guard.
+      for (var gy = 19; gy <= 31; gy++) {
+        for (var gx = 30; gx <= 39; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+
+      expect(subject, isNotNull);
+    });
+
+    test('computeMouthRegionDelta is 0 without grids and >0 when the mouth '
+        'region changes', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      // No grids -> 0.
+      expect(
+        FaceDetectionService.computeMouthRegionDelta(
+          null,
+          null,
+          w,
+          h,
+          nx0: 0.3,
+          ny0: 0.2,
+          nx1: 0.7,
+          ny1: 0.8,
+          prevNx0: 0.3,
+          prevNy0: 0.2,
+          prevNx1: 0.7,
+          prevNy1: 0.8,
+        ),
+        0.0,
+      );
+
+      // Build two grids identical except a brightening in the mouth sub-box.
+      final prev = Uint8List(w * h * 4);
+      final curr = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        prev[i * 4] = 100;
+        prev[i * 4 + 1] = 100;
+        prev[i * 4 + 2] = 100;
+        prev[i * 4 + 3] = 255;
+        curr[i * 4] = 100;
+        curr[i * 4 + 1] = 100;
+        curr[i * 4 + 2] = 100;
+        curr[i * 4 + 3] = 255;
+      }
+      // Mouth sub-box: x [0.25..0.75], y [0.58..0.88] of the face box.
+      // Face box normalized [0.3,0.2]-[0.7,0.8]; brighten a small block
+      // inside it so the 6x4 sampling grid is guaranteed to hit it.
+      for (var by = 27; by <= 31; by++) {
+        for (var bx = 38; bx <= 42; bx++) {
+          final o = (by * w + bx) * 4;
+          curr[o] = 220;
+          curr[o + 1] = 220;
+          curr[o + 2] = 220;
+        }
+      }
+
+      final delta = FaceDetectionService.computeMouthRegionDelta(
+        prev,
+        curr,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+      expect(delta, greaterThan(0.0));
     });
   });
 
