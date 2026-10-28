@@ -50,8 +50,7 @@ void main() {
       }
     });
 
-    test('a speaker switch is an instant cut, never a crawl through the wall',
-        () {
+    test('a speaker switch becomes two clean shot keyframes with a cut', () {
       final raw = <FaceTrackPoint>[
         for (var i = 0; i < 10; i++)
           FaceTrackPoint(timeSec: i * 0.5, normX: 0.2, normY: 0.5),
@@ -61,25 +60,26 @@ void main() {
 
       final keyframes = FaceDetectionService.buildKeyframes(raw);
 
-      // The transition happens within a single millisecond — no frames are
-      // spent drifting across the empty space between the two faces.
-      var instantCutFound = false;
-      for (var i = 1; i < keyframes.length; i++) {
-        final dt = keyframes[i].timeSec - keyframes[i - 1].timeSec;
-        final dx = (keyframes[i].normX - keyframes[i - 1].normX).abs();
-        if (dx >= 0.55 && dt <= 0.0011) instantCutFound = true;
-        // No emitted sample may ever sit between the two speakers.
+      // ONE clean keyframe per steady shot — not dozens of noisy RDP points.
+      expect(keyframes.length, 2);
+      expect(keyframes[0].timeSec, closeTo(0.0, 1e-9));
+      expect(keyframes[1].timeSec, closeTo(5.0, 1e-9));
+      expect(keyframes[0].normX, closeTo(0.2, 1e-9));
+      expect(keyframes[1].normX, closeTo(0.8, 1e-9));
+      expect(keyframes[1].isCut, isTrue);
+      // No emitted keyframe may ever sit between the two speakers.
+      for (final kf in keyframes) {
         expect(
-          keyframes[i].normX < 0.3 || keyframes[i].normX > 0.7,
+          kf.normX < 0.3 || kf.normX > 0.7,
           isTrue,
           reason: 'camera must never rest between speakers (got '
-              '${keyframes[i].normX})',
+              '${kf.normX})',
         );
       }
-      expect(instantCutFound, isTrue);
 
-      // The FFmpeg expression snaps too: evaluating the built expression at
-      // mid-clip times returns the active speaker, not the wall at 0.5.
+      // The FFmpeg expression snaps too: isCut keyframes are materialized
+      // into a 1ms step inside normExpression, so evaluating at mid-clip
+      // times returns the active speaker, not the wall at 0.5.
       final expr = FfmpegAutoReframeService.normExpression(
         keyframes,
         axisX: true,
@@ -90,6 +90,49 @@ void main() {
         _evaluateExpr(expr, 7.0),
         isNot(closeTo(0.5, 0.05)),
         reason: 'a linear crawl would put the camera at 0.5 here',
+      );
+    });
+
+    test('a steady single-speaker shot collapses to ONE clean keyframe', () {
+      // A real interview/podcast shot: the person jitters slightly around a
+      // single spot for the whole shot.
+      final raw = List<FaceTrackPoint>.generate(20, (i) {
+        return FaceTrackPoint(
+          timeSec: i * 0.5,
+          normX: 0.5 + (i.isEven ? 0.02 : -0.02),
+          normY: 0.42 + (i.isEven ? 0.01 : -0.01),
+        );
+      });
+
+      final keyframes = FaceDetectionService.buildKeyframes(raw);
+
+      expect(keyframes.length, 1);
+      expect(keyframes.first.timeSec, closeTo(0.0, 1e-9));
+      expect(keyframes.first.normX, closeTo(0.5, 0.05));
+      expect(keyframes.first.normY, closeTo(0.42, 0.05));
+      expect(keyframes.first.isCut, isTrue);
+    });
+
+    test('a speaker genuinely traveling across one shot keeps smooth '
+        'keyframes', () {
+      // One continuous segment with a large, gradual sweep (>0.14 travel):
+      // the collapse must NOT fire, intermediate keyframes stay smooth.
+      final raw = List<FaceTrackPoint>.generate(30, (i) {
+        return FaceTrackPoint(
+          timeSec: i * 0.5,
+          normX: 0.35 + i * 0.015,
+          normY: 0.45,
+        );
+      });
+
+      final keyframes = FaceDetectionService.buildKeyframes(raw);
+
+      expect(keyframes.length, greaterThan(2));
+      // Only the shot entry is a cut — the sweep itself is smooth.
+      expect(
+        keyframes.skip(1).any((k) => k.isCut),
+        isFalse,
+        reason: 'a traveling speaker must pan, not jump',
       );
     });
 
@@ -107,7 +150,10 @@ void main() {
       expect(keyframes.length, lessThanOrEqualTo(FaceDetectionService.maxKeyframes));
       expect(keyframes.length, greaterThanOrEqualTo(2));
       expect(keyframes.first.timeSec, raw.first.timeSec);
-      expect(keyframes.last.timeSec, raw.last.timeSec);
+      // Collapsed steady shots anchor at their start; the last one still
+      // covers the tail of the video (the final position holds to the end).
+      expect(keyframes.last.timeSec, lessThanOrEqualTo(raw.last.timeSec));
+      expect(keyframes.last.timeSec, greaterThan(raw.first.timeSec));
       for (var i = 1; i < keyframes.length; i++) {
         expect(
           keyframes[i].timeSec,
@@ -116,13 +162,16 @@ void main() {
       }
     });
 
-    test('short tracks are kept as-is', () {
+    test('a two-point jump becomes two clean shot keyframes', () {
       const raw = [
         FaceTrackPoint(timeSec: 0, normX: 0.4, normY: 0.3),
         FaceTrackPoint(timeSec: 1, normX: 0.6, normY: 0.5),
       ];
       final keyframes = FaceDetectionService.buildKeyframes(raw);
       expect(keyframes.length, 2);
+      expect(keyframes[0].normX, closeTo(0.4, 1e-9));
+      expect(keyframes[1].normX, closeTo(0.6, 1e-9));
+      expect(keyframes[1].isCut, isTrue);
     });
 
     test('sampleAt interpolates linearly for manual smooth keyframes', () {
@@ -266,8 +315,14 @@ void main() {
       final expr =
           FfmpegAutoReframeService.normExpression(keyframes, axisX: true);
       // Materialized into [0.2@0, 0.2@1.999, 0.8@2] → the snap segment has a
-      // 0.001s span.
-      expect(expr, contains('(0.8000-0.2000)*(t-1.999)/0.001'));
+      // 0.001s span, with `t` clamped into the segment (hold, no runaway
+      // extrapolation past the final keyframe).
+      expect(
+        expr,
+        contains(
+          '(0.8000-0.2000)*(min(max(t\\,1.999)\\,2.000)-1.999)/0.001',
+        ),
+      );
     });
   });
 
@@ -293,7 +348,7 @@ void main() {
       expect(inserted[0].timeSec, lessThan(inserted[1].timeSec));
     });
 
-    test('update within ±0.35s happens in place (no new keyframe)', () {
+    test('update within the 0.25s snap tolerance happens in place', () {
       var keyframes = const [
         FaceTrackPoint(timeSec: 0, normX: 0.5, normY: 0.5),
       ];
@@ -306,7 +361,7 @@ void main() {
 
       final updated = FaceDetectionService.upsertManualKeyframe(
         keyframes,
-        timeSec: 3.2, // inside the ±0.35s window
+        timeSec: 3.2, // inside the tight ±0.25s window
         normX: 0.75,
         normY: 0.4,
       );
@@ -331,13 +386,13 @@ void main() {
 
       final added = FaceDetectionService.upsertManualKeyframe(
         keyframes,
-        timeSec: 4.0, // > 0.35s away
+        timeSec: 3.3, // 0.3s away: beyond the 0.25s window
         normX: 0.1,
         normY: 0.2,
       );
 
       expect(added.length, 3);
-      expect(added.map((k) => k.timeSec), [0.0, 3.0, 4.0]);
+      expect(added.map((k) => k.timeSec), [0.0, 3.0, 3.3]);
     });
 
     test('delete removes one keyframe but always keeps at least one', () {
@@ -357,7 +412,10 @@ void main() {
       expect(FaceDetectionService.deleteKeyframe(keyframes, -1).length, 3);
     });
 
-    test('normalize folds synthetic 1ms helpers into cut keyframes', () {
+    test('normalize keeps clean shot keyframes and folds legacy helpers',
+        () {
+      // buildKeyframes now emits ONE clean keyframe per shot (no 1ms helper
+      // pairs); normalize must pass them through with cuts preserved.
       final raw = FaceDetectionService.buildKeyframes(<FaceTrackPoint>[
         for (var i = 0; i < 10; i++)
           FaceTrackPoint(timeSec: i * 0.5, normX: 0.2, normY: 0.5),
@@ -367,39 +425,59 @@ void main() {
 
       final normalized = FaceDetectionService.normalizeKeyframesForEditing(raw);
 
-      // No sub-5ms duplicates remain: the pair collapsed into ONE logical cut
-      // keyframe at the shot boundary carrying the NEW position.
+      expect(normalized.length, 2);
+      expect(normalized.first.timeSec, closeTo(0.0, 1e-9));
+      expect(normalized.last.timeSec, closeTo(5.0, 1e-9));
+      expect(normalized.last.normX, closeTo(0.8, 1e-9));
+      expect(normalized.last.isCut, isTrue);
+      // No sub-5ms duplicates.
       for (var i = 1; i < normalized.length; i++) {
         expect(
           normalized[i].timeSec - normalized[i - 1].timeSec,
           greaterThan(0.005),
         );
       }
-      final cut = normalized.firstWhere((k) => k.isCut);
-      expect(cut.normX, closeTo(0.8, 1e-9));
-      expect(cut.timeSec, closeTo(5.0, 1e-9));
+
+      // Legacy/external sources (e.g. stabilizeTrack output) may still
+      // contain synthetic 1ms step helpers — normalize folds those into a
+      // single logical cut keyframe carrying the NEW position.
+      const withHelpers = [
+        FaceTrackPoint(timeSec: 0, normX: 0.2, normY: 0.5),
+        FaceTrackPoint(timeSec: 4.999, normX: 0.2, normY: 0.5),
+        FaceTrackPoint(timeSec: 5.0, normX: 0.8, normY: 0.5),
+        FaceTrackPoint(timeSec: 9.5, normX: 0.8, normY: 0.5),
+      ];
+
+      final folded = FaceDetectionService.normalizeKeyframesForEditing(
+        withHelpers,
+      );
+
+      // The helper pair collapsed into ONE logical cut keyframe at 5.0
+      // carrying the NEW position; the trailing smooth anchor stays.
+      expect(folded.length, 3);
+      expect(folded[1].timeSec, closeTo(5.0, 1e-9));
+      expect(folded[1].normX, closeTo(0.8, 1e-9));
+      expect(folded[1].isCut, isTrue);
     });
   });
 
-  group('silhouette / motion subject fallback', () {
-    test('dark silhouette on bright background is detected', () {
+  group('anonymized black-mask silhouette fallback', () {
+    test('a pitch-black seated silhouette on a bright studio background is '
+        'detected', () {
       const w = FaceDetectionService.silhouetteGridWidth;
       const h = FaceDetectionService.silhouetteGridHeight;
       final rgba = Uint8List(w * h * 4);
 
-      void fill(int value) {
-        for (var i = 0; i < w * h; i++) {
-          rgba[i * 4] = value;
-          rgba[i * 4 + 1] = value;
-          rgba[i * 4 + 2] = value;
-          rgba[i * 4 + 3] = 255;
-        }
+      // Bright studio background.
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
       }
-
-      // Bright studio background, pitch-black silhouette guest on the right.
-      fill(140);
-      for (var gy = 10; gy <= 30; gy++) {
-        for (var gx = 50; gx <= 62; gx++) {
+      // Seated torso-sized pitch-black mask: x 48..64, y 8..34.
+      for (var gy = 8; gy <= 34; gy++) {
+        for (var gx = 48; gx <= 64; gx++) {
           final o = (gy * w + gx) * 4;
           rgba[o] = 8;
           rgba[o + 1] = 8;
@@ -415,13 +493,13 @@ void main() {
       );
 
       expect(subject, isNotNull);
-      // X centered on the blob (50..62 of 80), within the search region.
-      expect(subject!.normX, inInclusiveRange(0.55, 0.85));
-      expect(subject.normX, closeTo((56 + 0.5) / w, 0.06));
-      // Y biased to the head / upper-torso of the cluster.
-      expect(subject.normY, closeTo((10 + 21 * 0.32) / h, 0.06));
+      // X = centroid of the cluster's upper half (head/shoulders).
+      expect(subject!.normX, closeTo((56 + 0.5) / w, 0.03));
+      // Y = head level of the cluster (top + 0.28 * cluster height).
+      expect(subject.normY, closeTo((8 + 27 * 0.28) / h, 0.03));
+      expect(subject.normW, greaterThan(0.1));
+      expect(subject.normH, greaterThan(0.4));
       expect(subject.sceneChanged, isFalse);
-      expect(subject.normH, greaterThan(0.1));
     });
 
     test('uniform bright frame (empty wall) finds nothing', () {
@@ -441,50 +519,114 @@ void main() {
       );
     });
 
-    test('frame-to-frame motion finds a bright moving subject', () {
+    test('high-contrast studio stripes (sharp edges) are rejected', () {
       const w = FaceDetectionService.silhouetteGridWidth;
       const h = FaceDetectionService.silhouetteGridHeight;
-      Uint8List uniform(int value) {
-        final bytes = Uint8List(w * h * 4);
-        for (var i = 0; i < w * h; i++) {
-          bytes[i * 4] = value;
-          bytes[i * 4 + 1] = value;
-          bytes[i * 4 + 2] = value;
-          bytes[i * 4 + 3] = 255;
-        }
-        return bytes;
-      }
+      final rgba = Uint8List(w * h * 4);
 
-      final prev = uniform(140);
-      final current = uniform(140);
-      // A mid-gray subject (NOT dark enough for the silhouette term) moved
-      // into place — only the motion term can find him.
-      for (var gy = 10; gy <= 30; gy++) {
-        for (var gx = 50; gx <= 62; gx++) {
+      // Alternating 1-cell vertical stripes: every cell has a >100-luma
+      // gradient neighbor. The old `gradient > 30` heuristic locked onto
+      // exactly this kind of studio furniture / wall edge.
+      for (var gy = 0; gy < h; gy++) {
+        for (var gx = 0; gx < w; gx++) {
+          final value = gx.isEven ? 60 : 200;
           final o = (gy * w + gx) * 4;
-          current[o] = 60;
-          current[o + 1] = 60;
-          current[o + 2] = 60;
+          rgba[o] = value;
+          rgba[o + 1] = value;
+          rgba[o + 2] = value;
+          rgba[o + 3] = 255;
         }
       }
 
-      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
-        current,
-        w,
-        h,
-        prev,
+      expect(
+        FaceDetectionService.detectSilhouetteOrMotionSubject(rgba, w, h, null),
+        isNull,
       );
+    });
 
-      expect(subject, isNotNull);
-      expect(subject!.normX, closeTo((56 + 0.5) / w, 0.06));
-      // 273 changed cells of 3600 → mean luma diff ~6: not a scene cut.
-      expect(subject.sceneChanged, isFalse);
+    test('a thin black microphone arm is rejected by the 3x3 uniformity', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // A 1-cell-wide pitch-black vertical line: only 3 of the 9 cells in
+      // its 3x3 window are dark, so the uniformity guard rejects all of it.
+      for (var gy = 0; gy < h; gy++) {
+        final o = (gy * w + 55) * 4;
+        rgba[o] = 8;
+        rgba[o + 1] = 8;
+        rgba[o + 2] = 8;
+      }
+
+      expect(
+        FaceDetectionService.detectSilhouetteOrMotionSubject(rgba, w, h, null),
+        isNull,
+      );
+    });
+
+    test('a small black prop (below human torso size) is rejected', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // A hand-sized black bag on the desk: contiguous and pitch black, but
+      // far below the 6%-of-grid human-torso minimum.
+      for (var gy = 30; gy <= 36; gy++) {
+        for (var gx = 30; gx <= 36; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+
+      expect(
+        FaceDetectionService.detectSilhouetteOrMotionSubject(rgba, w, h, null),
+        isNull,
+      );
+    });
+
+    test('dark colored decor (wood/bronze) is not an anonymization mask', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Near-black luma (15) but a wide RGB channel spread (25): dark
+      // colored props must never qualify as the pitch-black mask.
+      for (var gy = 8; gy <= 34; gy++) {
+        for (var gx = 48; gx <= 64; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 30;
+          rgba[o + 1] = 10;
+          rgba[o + 2] = 5;
+        }
+      }
+
+      expect(
+        FaceDetectionService.detectSilhouetteOrMotionSubject(rgba, w, h, null),
+        isNull,
+      );
     });
 
     test('a hard scene cut is flagged so identity never carries over', () {
       const w = FaceDetectionService.silhouetteGridWidth;
       const h = FaceDetectionService.silhouetteGridHeight;
-      Uint8List frame(int background, int blob) {
+      Uint8List frame(int background) {
         final bytes = Uint8List(w * h * 4);
         for (var i = 0; i < w * h; i++) {
           bytes[i * 4] = background;
@@ -492,19 +634,19 @@ void main() {
           bytes[i * 4 + 2] = background;
           bytes[i * 4 + 3] = 255;
         }
-        for (var gy = 10; gy <= 30; gy++) {
-          for (var gx = 50; gx <= 62; gx++) {
+        for (var gy = 8; gy <= 34; gy++) {
+          for (var gx = 48; gx <= 64; gx++) {
             final o = (gy * w + gx) * 4;
-            bytes[o] = blob;
-            bytes[o + 1] = blob;
-            bytes[o + 2] = blob;
+            bytes[o] = 8;
+            bytes[o + 1] = 8;
+            bytes[o + 2] = 8;
           }
         }
         return bytes;
       }
 
-      final prev = frame(200, 200); // bright empty shot
-      final current = frame(140, 8); // bright studio shot + black silhouette
+      final prev = frame(200); // bright empty shot
+      final current = frame(140); // studio shot + black silhouette
 
       final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
         current,
@@ -610,7 +752,9 @@ void main() {
       );
       expect(expr, contains('0.3000'));
       expect(expr, contains('0.7000'));
-      expect(expr, contains('(t-0.000)'));
+      // The single segment clamps `t` into [0.000, 2.000] so the camera
+      // holds the edge keyframes instead of extrapolating.
+      expect(expr, contains('min(max(t\\,0.000)\\,2.000)'));
       expect(expr, isNot(contains('if('))); // only two points -> one segment
 
       final many = FfmpegAutoReframeService.normExpression(const [
@@ -686,12 +830,28 @@ void main() {
       expect(filter, contains('setsar=1'));
       expect(filter, contains('format=yuv420p'));
       // The face still sits at the center of the cropped region; the 0.4
-      // jump between the two keyframes is materialized as a 1ms snap.
+      // jump between the two keyframes is materialized as a 1ms snap (and
+      // `t` is clamped into each segment: hold, never extrapolate).
       expect(filter, contains('iw*(if(lt(t\\,1.999)'));
-      expect(filter, contains('0.3000+(0.3000-0.3000)*(t-0.000)/1.999'));
-      expect(filter, contains('(0.7000-0.3000)*(t-1.999)/0.001'));
+      expect(
+        filter,
+        contains(
+          '0.3000+(0.3000-0.3000)*(min(max(t\\,0.000)\\,1.999)-0.000)/1.999',
+        ),
+      );
+      expect(
+        filter,
+        contains(
+          '(0.7000-0.3000)*(min(max(t\\,1.999)\\,2.000)-1.999)/0.001',
+        ),
+      );
       expect(filter, contains('ih*(if(lt(t\\,1.999)'));
-      expect(filter, contains('(0.6000-0.4000)*(t-1.999)/0.001'));
+      expect(
+        filter,
+        contains(
+          '(0.6000-0.4000)*(min(max(t\\,1.999)\\,2.000)-1.999)/0.001',
+        ),
+      );
 
       // Landscape: bars move to the sides.
       final landscape = FfmpegAutoReframeService.buildCropFilter(
@@ -899,6 +1059,24 @@ class _ExprEvaluator {
       final value = _expr();
       _expectChar(')');
       return value;
+    }
+    // FFmpeg's min()/max() — used by the leaf segments to clamp `t` into
+    // the segment so the camera holds (not extrapolates) past the ends.
+    if (_startsWith('min(')) {
+      i += 4;
+      final a = _additive();
+      _expectChar(',');
+      final b = _additive();
+      _expectChar(')');
+      return a < b ? a : b;
+    }
+    if (_startsWith('max(')) {
+      i += 4;
+      final a = _additive();
+      _expectChar(',');
+      final b = _additive();
+      _expectChar(')');
+      return a > b ? a : b;
     }
     if (i < s.length && s[i] == 't') {
       i++;

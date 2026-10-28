@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
@@ -46,9 +47,16 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   /// whenever [_recomputeEffectiveTrack] runs.
   List<FaceTrackPoint> _workingKeyframes = const [];
 
-  /// When on, tapping the video places/moves the crop window instead of
-  /// locking onto a detected face.
-  bool _editMode = false;
+  /// Pixel radius within which the magnetic timeline snaps the playhead to
+  /// a keyframe marker (CapCut-style magnetic scrubbing).
+  static const double magneticSnapPx = 12.0;
+
+  /// Last tap position on the video preview (used by double-tap-to-place).
+  Offset? _lastPreviewTap;
+
+  /// Last keyframe the magnetic timeline snapped to during the current
+  /// gesture (haptic feedback fires once per newly-snapped keyframe).
+  double? _lastSnappedKfSec;
 
   /// Crop-box drag origin (normalized), kept across a pan gesture.
   (double, double)? _dragOrigin;
@@ -242,7 +250,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return best;
   }
 
-  /// Insert-or-update a manual keyframe at [timeSec] (±0.35s window).
+  /// Insert-or-update a manual keyframe at [timeSec] (tight ±0.25s window).
   void _upsertManualKeyframeAt(double timeSec, double normX, double normY) {
     setState(() {
       _workingKeyframes = FaceDetectionService.upsertManualKeyframe(
@@ -262,34 +270,87 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     setState(() {});
   }
 
-  /// "+ Add / Set KF": keyframes the crop position at the playhead.
-  void _addOrSetKeyframeAtPlayhead() {
+  /// Index of a keyframe the playhead currently sits on (±0.25s), or -1.
+  int _keyframeAtPlayheadIndex() {
+    final keyframes = _workingKeyframes;
+    if (keyframes.isEmpty) return -1;
+    var best = -1;
+    var bestDelta = FaceDetectionService.manualKeyframeToleranceSec;
+    for (var i = 0; i < keyframes.length; i++) {
+      final delta = (keyframes[i].timeSec - _positionSeconds).abs();
+      if (delta <= bestDelta) {
+        bestDelta = delta;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /// The single smart `◆+ Add KF` / `◆- Delete KF` button: drops a keyframe
+  /// at the playhead, or removes the one the playhead sits on.
+  void _smartKeyframeToggle() {
+    final index = _keyframeAtPlayheadIndex();
+    if (index >= 0) {
+      _deleteKeyframeAt(index);
+      return;
+    }
     final (x, y) = _currentSampledPosition(_positionSeconds);
     _upsertManualKeyframeAt(_positionSeconds, x, y);
+  }
+
+  void _deleteKeyframeAt(int index) {
+    setState(() {
+      _workingKeyframes = FaceDetectionService.deleteKeyframe(
+        _workingKeyframes,
+        index,
+      );
+    });
+  }
+
+  /// `Center ⌖`: parks the current keyframe at the frame center (0.5, 0.45).
+  void _centerCurrentKeyframe() {
+    final onIdx = _keyframeAtPlayheadIndex();
+    final index =
+        onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
+    if (index < 0) return;
+    setState(() {
+      final updated = List<FaceTrackPoint>.of(_workingKeyframes);
+      updated[index] = updated[index].copyWith(
+        normX: 0.5,
+        normY: 0.45,
+        isManual: true,
+      );
+      _workingKeyframes = updated;
+    });
+  }
+
+  /// `Clear All 🗑️`: drops every AI keyframe and leaves one centered keyframe
+  /// at 0:00 so the whole video can be keyframed manually from scratch.
+  void _clearAllKeyframes() {
+    setState(() {
+      _workingKeyframes = [
+        const FaceTrackPoint(
+          timeSec: 0,
+          normX: 0.5,
+          normY: 0.45,
+          isManual: true,
+        ),
+      ];
+    });
   }
 
   /// Toggles the transition of the current keyframe. Marked `isManual` so the
   /// automatic cut heuristics never override the user's choice.
   void _toggleCutForCurrentKeyframe() {
-    final index = _nearestKfIndex(_positionSeconds);
+    final onIdx = _keyframeAtPlayheadIndex();
+    final index =
+        onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
     if (index < 0) return;
     setState(() {
       final updated = List<FaceTrackPoint>.of(_workingKeyframes);
       final point = updated[index];
       updated[index] = point.copyWith(isCut: !point.isCut, isManual: true);
       _workingKeyframes = updated;
-    });
-  }
-
-  void _deleteCurrentKeyframe() {
-    if (_workingKeyframes.length <= 1) return;
-    final index = _nearestKfIndex(_positionSeconds);
-    if (index < 0) return;
-    setState(() {
-      _workingKeyframes = FaceDetectionService.deleteKeyframe(
-        _workingKeyframes,
-        index,
-      );
     });
   }
 
@@ -703,7 +764,9 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 final previewH = constraints.maxHeight;
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  // Drag the purple crop box directly on the video.
+                  // Always-on CapCut-style direct manipulation: one-finger
+                  // drag moves the crop box (no mode toggle needed), and
+                  // playback pauses automatically while dragging.
                   onPanStart: (_) => _onCropPanStart(),
                   onPanUpdate: (details) => _onCropPanUpdate(
                     details.delta.dx,
@@ -712,24 +775,29 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     previewH,
                   ),
                   onPanEnd: (_) => _onCropPanEnd(),
-                  onTapUp: (details) {
-                    if (previewW <= 0 || previewH <= 0) return;
-                    final rawX =
-                        (details.localPosition.dx / previewW).clamp(0.0, 1.0);
-                    final rawY =
-                        (details.localPosition.dy / previewH).clamp(0.0, 1.0);
-                    if (_editMode) {
-                      // Edit mode: tap places the crop center right there.
-                      final (cx, cy) = _clampCropCenter(
-                        rawX,
-                        rawY,
-                        previewW,
-                        previewH,
-                      );
-                      _upsertManualKeyframeAt(_positionSeconds, cx, cy);
+                  // Double-tap drops the crop box right at that spot (the
+                  // tap position is captured by onTapDown below).
+                  onDoubleTap: () {
+                    final local = _lastPreviewTap;
+                    if (local == null || previewW <= 0 || previewH <= 0) {
                       return;
                     }
-                    _onPreviewTap(rawX, rawY);
+                    final (cx, cy) = _clampCropCenter(
+                      (local.dx / previewW).clamp(0.0, 1.0),
+                      (local.dy / previewH).clamp(0.0, 1.0),
+                      previewW,
+                      previewH,
+                    );
+                    _upsertManualKeyframeAt(_positionSeconds, cx, cy);
+                  },
+                  onTapDown: (details) =>
+                      _lastPreviewTap = details.localPosition,
+                  onTapUp: (details) {
+                    if (previewW <= 0 || previewH <= 0) return;
+                    _onPreviewTap(
+                      (details.localPosition.dx / previewW).clamp(0.0, 1.0),
+                      (details.localPosition.dy / previewH).clamp(0.0, 1.0),
+                    );
                   },
                   child: Stack(
                     fit: StackFit.expand,
@@ -748,12 +816,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                           faces: faces,
                         ),
                       ),
-                      if (_editMode)
-                        const Positioned(
-                          left: 8,
-                          top: 8,
-                          child: _EditModeBadge(),
-                        ),
                       Positioned(
                         right: 8,
                         bottom: 8,
@@ -779,19 +841,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             ),
           ),
         ),
-        Slider(
-          value: _positionSeconds.clamp(0, _durationSeconds).toDouble(),
-          max: _durationSeconds > 0 ? _durationSeconds : 1,
-          onChanged: _durationSeconds > 0
-              ? (value) => controller.seekTo(
-                  Duration(milliseconds: (value * 1000).round()),
-                )
-              : null,
-        ),
-        Text(
-          '${_formatTime(_positionSeconds)} / ${_formatTime(_durationSeconds)}',
-          style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
-        ),
       ],
     );
   }
@@ -805,7 +854,11 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     final duration = _durationSeconds > 0 ? _durationSeconds : 0.0;
     final position = _positionSeconds.clamp(0.0, duration > 0 ? duration : 0.0);
     final currentIdx = _nearestKfIndex(position);
-    final selected = currentIdx >= 0 ? keyframes[currentIdx] : null;
+    final onKfIdx = _keyframeAtPlayheadIndex();
+    final onKf = onKfIdx >= 0;
+    final selected = onKf
+        ? keyframes[onKfIdx]
+        : (currentIdx >= 0 ? keyframes[currentIdx] : null);
     final hasPrev = keyframes.any((k) => k.timeSec < position - 0.05);
     final hasNext = keyframes.any((k) => k.timeSec > position + 0.05);
 
@@ -816,107 +869,105 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // --- Player & keyframe control bar (CapCut style) -------------
             Row(
               children: [
-                const Expanded(
-                  child: Text(
-                    'Keyframe Editor',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                IconButton(
+                  tooltip: _controller?.value.isPlaying == true
+                      ? 'Pause'
+                      : 'Play',
+                  onPressed: duration > 0
+                      ? () {
+                          final controller = _controller;
+                          if (controller == null) return;
+                          setState(() {
+                            controller.value.isPlaying
+                                ? controller.pause()
+                                : controller.play();
+                          });
+                        }
+                      : null,
+                  icon: Icon(
+                    _controller?.value.isPlaying == true
+                        ? Icons.pause
+                        : Icons.play_arrow,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+                Text(
+                  '${_formatTimeTenths(position)} / '
+                  '${_formatTimeTenths(duration)}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: [FontFeature.tabularFigures()],
                   ),
                 ),
-                FilterChip(
-                  avatar: Icon(
-                    Icons.edit,
-                    size: 16,
-                    color: _editMode ? Colors.black : AppColors.textTertiary,
-                  ),
-                  label: const Text('Edit Keyframes'),
-                  selected: _editMode,
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Previous keyframe',
+                  onPressed: hasPrev ? () => _jumpKeyframe(-1) : null,
+                  icon: const Text('⟨◆', style: TextStyle(fontSize: 14)),
                   visualDensity: VisualDensity.compact,
-                  onSelected: (value) => setState(() => _editMode = value),
+                ),
+                // The one smart keyframe button: add here, or delete the
+                // keyframe the playhead sits on.
+                ElevatedButton.icon(
+                  onPressed: duration > 0 ? _smartKeyframeToggle : null,
+                  icon: Icon(
+                    onKf ? Icons.bookmark_remove : Icons.add_circle,
+                    size: 18,
+                  ),
+                  label: Text(
+                    onKf ? '◆- Delete KF' : '◆+ Add KF',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: onKf
+                        ? const Color(0xFFFF5252)
+                        : const Color(0xFF00E5FF),
+                    foregroundColor: onKf ? Colors.white : Colors.black,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Next keyframe',
+                  onPressed: hasNext ? () => _jumpKeyframe(1) : null,
+                  icon: const Text('◆⟩', style: TextStyle(fontSize: 14)),
+                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),
+            const SizedBox(height: 6),
+
+            // --- Scrubbable magnetic keyframe timeline --------------------
+            _buildMagneticTimeline(
+              keyframes: keyframes,
+              duration: duration,
+              position: position,
+              currentIdx: currentIdx,
+            ),
             const SizedBox(height: 4),
             const Text(
-              'Drag the crop box on the video (or tap with Edit Keyframes on) '
-              'to place keyframes.',
-              style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
-            ),
-            const SizedBox(height: 8),
-
-            // Visual keyframe timeline: AI cyan, manual gold, active magenta;
-            // filled diamond = instant cut, hollow = smooth pan.
-            SizedBox(
-              height: 46,
-              width: double.infinity,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.maxWidth;
-                  return GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTapUp: (details) {
-                      if (duration <= 0 || keyframes.isEmpty) return;
-                      final tapped =
-                          details.localPosition.dx.clamp(0.0, width);
-                      final tappedTime = tapped / width * duration;
-                      // Snap to a marker within ~14px, else plain seek.
-                      var target = tappedTime;
-                      var bestDelta = 14.0 / width * duration;
-                      for (final kf in keyframes) {
-                        final delta = (kf.timeSec - tappedTime).abs();
-                        if (delta <= bestDelta) {
-                          bestDelta = delta;
-                          target = kf.timeSec;
-                        }
-                      }
-                      _seekToTime(target);
-                    },
-                    child: CustomPaint(
-                      size: Size(width, 46),
-                      painter: KeyframeTimelinePainter(
-                        keyframes: keyframes,
-                        duration: duration,
-                        position: position,
-                        selectedIndex: currentIdx,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              '◆ AI cyan · ◆ manual gold · ◆ active magenta · '
-              'filled = cut · hollow = smooth',
+              'Drag to scrub (snaps to keyframes) · AI ◆ cyan, manual ◆ gold, '
+              'active ◆ magenta · filled = cut, hollow = smooth · '
+              'double-tap video = place crop',
               style: TextStyle(fontSize: 10, color: AppColors.textTertiary),
             ),
             const SizedBox(height: 8),
 
-            // Keyframe action toolbar.
+            // --- Quick keyframe actions ------------------------------------
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                _editorButton(
-                  icon: Icons.chevron_left,
-                  label: 'Prev KF',
-                  onPressed:
-                      hasPrev ? () => _jumpKeyframe(-1) : null,
-                ),
-                _editorButton(
-                  icon: Icons.chevron_right,
-                  label: 'Next KF',
-                  onPressed:
-                      hasNext ? () => _jumpKeyframe(1) : null,
-                ),
-                _editorButton(
-                  icon: Icons.add_location_alt,
-                  label: 'Add / Set KF',
-                  onPressed: duration > 0
-                      ? _addOrSetKeyframeAtPlayhead
-                      : null,
-                ),
                 _editorButton(
                   icon: selected != null && !selected.isCut
                       ? Icons.waves
@@ -929,11 +980,16 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                       selected != null ? _toggleCutForCurrentKeyframe : null,
                 ),
                 _editorButton(
-                  icon: Icons.delete_outline,
-                  label: 'Delete 🗑️',
-                  onPressed: _workingKeyframes.length > 1
-                      ? _deleteCurrentKeyframe
+                  icon: Icons.center_focus_strong,
+                  label: 'Center ⌖',
+                  onPressed: keyframes.isNotEmpty
+                      ? _centerCurrentKeyframe
                       : null,
+                ),
+                _editorButton(
+                  icon: Icons.delete_sweep,
+                  label: 'Clear All 🗑️',
+                  onPressed: _clearAllKeyframes,
                 ),
                 _editorButton(
                   icon: Icons.restart_alt,
@@ -944,10 +1000,10 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             ),
             const SizedBox(height: 8),
 
-            // Scrollable keyframe chips.
+            // --- Keyframe chips: tap seeks, × deletes instantly -----------
             if (keyframes.isNotEmpty)
               SizedBox(
-                height: 36,
+                height: 44,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: keyframes.length,
@@ -956,22 +1012,24 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     final kf = keyframes[i];
                     final marker =
                         '${kf.isManual ? '✋' : ''}${kf.isCut ? '⚡' : '〰️'}';
-                    return ChoiceChip(
+                    return InputChip(
                       label: Text(
-                        '#${i + 1} ${_formatTime(kf.timeSec)} $marker',
+                        '#${i + 1} ${_formatTimeTenths(kf.timeSec)} $marker',
                         style: const TextStyle(fontSize: 12),
                       ),
                       selected: i == currentIdx,
                       visualDensity: VisualDensity.compact,
                       onSelected: (_) => _seekToTime(kf.timeSec),
+                      onDeleted: () => _deleteKeyframeAt(i),
+                      deleteIcon: const Icon(Icons.cancel, size: 16),
                     );
                   },
                 ),
               )
             else
               const Text(
-                'No keyframes yet — play the video and press '
-                '"Add / Set KF", or drag the crop box.',
+                'No keyframes yet — drag the crop box on the video or press '
+                '"◆+ Add KF".',
                 style:
                     TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
@@ -979,6 +1037,84 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         ),
       ),
     );
+  }
+
+  /// Magnetic timeline strip: tap or finger-scrub to seek, snapping to the
+  /// nearest keyframe marker within 12 pixels with a haptic tick.
+  Widget _buildMagneticTimeline({
+    required List<FaceTrackPoint> keyframes,
+    required double duration,
+    required double position,
+    required int currentIdx,
+  }) {
+    return SizedBox(
+      height: 54,
+      width: double.infinity,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+
+          double? scrubTime(double dx) {
+            if (duration <= 0 || width <= 0) return null;
+            final t = (dx.clamp(0.0, width) / width) * duration;
+            final timeTolerance = magneticSnapPx / width * duration;
+            var snapped = t;
+            var bestDelta = timeTolerance;
+            for (final kf in keyframes) {
+              final delta = (kf.timeSec - t).abs();
+              if (delta <= bestDelta) {
+                bestDelta = delta;
+                snapped = kf.timeSec;
+              }
+            }
+            // One haptic tick per newly-snapped marker, not per drag frame.
+            if ((snapped - t).abs() > 1e-9 && snapped != _lastSnappedKfSec) {
+              _lastSnappedKfSec = snapped;
+              HapticFeedback.selectionClick();
+            }
+            return snapped;
+          }
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: (details) {
+              _lastSnappedKfSec = null;
+              final t = scrubTime(details.localPosition.dx);
+              if (t != null) _seekToTime(t);
+            },
+            onHorizontalDragUpdate: (details) {
+              final t = scrubTime(details.localPosition.dx);
+              if (t != null) _seekToTime(t);
+            },
+            onHorizontalDragEnd: (_) => _lastSnappedKfSec = null,
+            onHorizontalDragCancel: () => _lastSnappedKfSec = null,
+            onTapDown: (details) {
+              _lastSnappedKfSec = null;
+              final t = scrubTime(details.localPosition.dx);
+              if (t != null) _seekToTime(t);
+            },
+            child: CustomPaint(
+              size: Size(width, 54),
+              painter: KeyframeTimelinePainter(
+                keyframes: keyframes,
+                duration: duration,
+                position: position,
+                selectedIndex: currentIdx,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// `m:ss.t` (tenths) so exact keyframe timing is readable at a glance.
+  String _formatTimeTenths(double seconds) {
+    if (!seconds.isFinite || seconds < 0) return '0:00.0';
+    final whole = seconds.floor();
+    final tenths = ((seconds - whole) * 10).floor();
+    return '${whole ~/ 60}:${(whole % 60).toString().padLeft(2, '0')}.'
+        '$tenths';
   }
 
   Widget _editorButton({
@@ -1294,13 +1430,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       ],
     );
   }
-
-  static String _formatTime(double seconds) {
-    final total = seconds < 0 ? 0 : seconds.round();
-    final minutes = total ~/ 60;
-    final secs = total % 60;
-    return '$minutes:${secs.toString().padLeft(2, '0')}';
-  }
 }
 
 /// One detected person drawn on the preview (average trajectory position at
@@ -1590,37 +1719,6 @@ class ReframeOverlayPainter extends CustomPainter {
         oldDelegate.style != style ||
         oldDelegate.speakerLocked != speakerLocked ||
         oldDelegate.faces.length != faces.length;
-  }
-}
-
-/// Small hint badge shown on the preview while "Edit Keyframes" mode is on.
-class _EditModeBadge extends StatelessWidget {
-  const _EditModeBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xCCCDDC39),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.edit, size: 14, color: Colors.black),
-          SizedBox(width: 4),
-          Text(
-            'Edit mode: tap/drag to move crop',
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Colors.black,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

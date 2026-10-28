@@ -349,7 +349,13 @@ class FaceDetectionService {
       Uint8List? prevGridBytes;
       _SpeakerTrack? currentSpeaker;
       var lastX = 0.5;
-      var lastY = 0.42;
+      var lastY = 0.45;
+      double? lastFaceSeenSec;
+      // Distant/background false-positive boxes (decor, small objects) must
+      // never drive the camera: a person occupies a meaningful share of the
+      // frame in any usable interview/podcast shot.
+      final minFaceHeight = imgHeight * 0.06;
+      final minFaceWidth = imgWidth * 0.035;
 
       for (var i = 0; i < frames.length; i++) {
         final timeSec = startSec + i / sampleFps;
@@ -361,11 +367,15 @@ class FaceDetectionService {
           AppLogger().e('FaceTrack: detector failed on frame $i', e);
           faces = const [];
         }
-        facesDetectedCount += faces.length;
 
         final present = <_SpeakerTrack>[];
         for (final face in faces) {
           final box = face.boundingBox;
+          if (box.height < minFaceHeight || box.width < minFaceWidth) {
+            continue; // background noise, not a person
+          }
+          facesDetectedCount++;
+          lastFaceSeenSec = timeSec;
           final nx0 = (box.left / imgWidth).clamp(0.0, 1.0);
           final ny0 = (box.top / imgHeight).clamp(0.0, 1.0);
           final nx1 = (box.right / imgWidth).clamp(0.0, 1.0);
@@ -407,53 +417,72 @@ class FaceDetectionService {
         }
 
         if (faces.isEmpty) {
-          // Blacked-out silhouette guest or partially hidden speaker: ML Kit
-          // found nothing, so look for a dark/edgy/moving foreground subject
-          // instead of blindly holding the previous shot's camera position.
+          // No ML Kit face. ONLY a contiguous pitch-black seated silhouette
+          // (the anonymized guest) may create or continue a subject —
+          // furniture, glowing tables, microphones and wall decorations with
+          // their sharp edges must never be tracked.
           final grid = await _analysisGrid(frames[i].path);
+          SilhouetteSubject? subject;
+          var cut = false;
           if (grid != null) {
-            final subject = detectSilhouetteOrMotionSubject(
+            subject = detectSilhouetteOrMotionSubject(
               grid,
               silhouetteGridWidth,
               silhouetteGridHeight,
               prevGridBytes,
             );
+            cut = isSceneChange(
+              prevGridBytes,
+              grid,
+              silhouetteGridWidth,
+              silhouetteGridHeight,
+            );
             prevGridBytes = grid;
-            if (subject != null) {
-              silhouetteHits++;
-              final matched = _associateSubject(
-                tracks,
-                nowSec: timeSec,
+          }
+          if (subject != null) {
+            silhouetteHits++;
+            final matched = _associateSubject(
+              tracks,
+              nowSec: timeSec,
+              normX: subject.normX,
+              normY: subject.normY,
+              // A hard scene cut starts a new identity: never inherit the
+              // previous shot's person.
+              allowExisting: !subject.sceneChanged,
+            );
+            _SpeakerTrack subjectTrack;
+            if (matched == null) {
+              subjectTrack = _SpeakerTrack(tracks.length)
+                ..isSilhouette = true;
+              tracks[subjectTrack.id] = subjectTrack;
+            } else {
+              subjectTrack = matched;
+            }
+            _updateTrack(
+              subjectTrack,
+              timeSec,
+              subject.normX,
+              subject.normY,
+              subject.normW,
+              subject.normH,
+            );
+            subjectTrack.points.add(
+              FaceTrackPoint(
+                timeSec: timeSec,
                 normX: subject.normX,
                 normY: subject.normY,
-                // A hard scene cut starts a new identity: never inherit the
-                // previous shot's person.
-                allowExisting: !subject.sceneChanged,
-              );
-              _SpeakerTrack subjectTrack;
-              if (matched == null) {
-                subjectTrack = _SpeakerTrack(tracks.length)
-                  ..isSilhouette = true;
-                tracks[subjectTrack.id] = subjectTrack;
-              } else {
-                subjectTrack = matched;
-              }
-              _updateTrack(
-                subjectTrack,
-                timeSec,
-                subject.normX,
-                subject.normY,
-                subject.normW,
-                subject.normH,
-              );
-              subjectTrack.points.add(
-                FaceTrackPoint(
-                  timeSec: timeSec,
-                  normX: subject.normX,
-                  normY: subject.normY,
-                ),
-              );
-              present.add(subjectTrack);
+              ),
+            );
+            present.add(subjectTrack);
+          } else {
+            // Nothing credible in this frame: after a hard cut, or once no
+            // face has been seen for a while, reset to the frame center
+            // instead of holding an off-center crop on an empty wall.
+            final stale = lastFaceSeenSec == null ||
+                timeSec - lastFaceSeenSec > emptyFrameCenterResetSec;
+            if (cut || stale) {
+              lastX = 0.5;
+              lastY = 0.45;
             }
           }
         }
@@ -494,7 +523,7 @@ class FaceDetectionService {
         deadZone: deadZone,
         smoothness: smoothness,
       );
-      final profiles = _buildProfiles(tracks);
+      final profiles = _buildProfiles(tracks, frameCount: frames.length);
       final avgX =
           activePoints.map((p) => p.normX).reduce((a, b) => a + b) /
           activePoints.length;
@@ -558,15 +587,48 @@ class FaceDetectionService {
   static const int silhouetteGridHeight = 45;
 
   /// Mean absolute luma difference (0..255) above which two grids count as a
-  /// scene cut (motion scoring is then invalid).
+  /// scene cut (identity must never carry over a hard cut).
   static const double silhouetteSceneChangeThreshold = 16.0;
 
-  /// Normalized search region for foreground subjects (keeps out letterbox
-  /// bars, lower-third graphics and playback chrome).
-  static const double silhouetteRegionX0 = 0.08;
-  static const double silhouetteRegionX1 = 0.92;
-  static const double silhouetteRegionY0 = 0.15;
-  static const double silhouetteRegionY1 = 0.85;
+  /// Normalized search region for the anonymized silhouette (keeps out
+  /// letterbox bars, lower-third graphics and playback chrome).
+  static const double silhouetteRegionX0 = 0.06;
+  static const double silhouetteRegionX1 = 0.94;
+  static const double silhouetteRegionY0 = 0.12;
+  static const double silhouetteRegionY1 = 0.92;
+
+  /// An anonymized guest is masked with a **contiguous pitch-black** shape:
+  /// near-zero luma AND almost no RGB channel spread (colored wood, bronze
+  /// and warm studio decor never qualify). Sharp edges, gradients and generic
+  /// motion are deliberately NOT person signals — studio furniture, glowing
+  /// tables, microphones and wall decorations all have sharp edges, and
+  /// locking onto them was a real-world false positive.
+  static const int silhouetteMaxLuma = 18;
+  static const int silhouetteNeighborhoodLuma = 22;
+  static const int silhouetteMaxChannelSpread = 14;
+
+  /// The studio background must be clearly brighter than the black mask.
+  static const double silhouetteMinBackgroundLuma = 38;
+
+  /// Human-torso credibility guards: the mask must be seat-sized (6%..48% of
+  /// the grid), anchored low like a seated person and tall/wide enough to be
+  /// a torso — anything smaller or higher is a prop or decoration.
+  static const double silhouetteMinClusterFraction = 0.06;
+  static const double silhouetteMaxClusterFraction = 0.48;
+  static const double silhouetteMinBottomFraction = 0.65;
+  static const double silhouetteMaxTopFraction = 0.55;
+  static const double silhouetteMinHeightFraction = 0.22;
+  static const double silhouetteMinWidthFraction = 0.10;
+
+  /// With no credible subject at all (scene cut or empty wall for this long),
+  /// the camera resets to the frame center instead of holding the previous
+  /// closeup's off-center position.
+  static const double emptyFrameCenterResetSec = 1.5;
+
+  /// A segment where every sample stays within this distance (both axes) of
+  /// its median collapses to ONE clean shot keyframe instead of a noisy RDP
+  /// chain — the interview/podcast default.
+  static const double shotSteadyTolerance = 0.12;
 
   /// Decodes one analysis JPEG into an RGBA
   /// [silhouetteGridWidth] x [silhouetteGridHeight] grid (nearest-neighbour
@@ -614,25 +676,33 @@ class FaceDetectionService {
     }
   }
 
-  /// Finds the dominant foreground subject in a frame where ML Kit returned
-  /// **no faces** (pitch-black silhouette guest, occluded/partially visible
-  /// speaker).
+  /// Finds the **anonymized black-mask guest** in a frame where ML Kit
+  /// returned no faces.
   ///
   /// [rgbaBytes] is a raw RGBA grid of `width x height` cells (the service
-  /// uses 80x45); [prevRgbaBytes] is the previous decoded grid, used for the
-  /// scene-change score and the frame-to-frame motion term.
+  /// uses 80x45); [prevRgbaBytes] is the previous decoded grid, used only for
+  /// the scene-change score.
   ///
-  /// Weights per cell inside the search region:
-  ///  - very dark pixels (`luma < 28`) on a bright studio background
-  ///    (`globalMean > 45`) — the blacked-out silhouette guest;
-  ///  - high local spatial gradient — sharp foreground edge against the
-  ///    out-of-focus blurred studio background;
-  ///  - `|luma - prevLuma|` motion (head/hand/shoulder movement), skipped when
-  ///    the frame is a scene cut.
+  /// Strict rules — a cell counts as silhouette mass ONLY when:
+  ///  - `luma <= 18` AND the RGB channel spread is `<= 14` (a true
+  ///    pitch-black mask, never colored wood/decor), on a background whose
+  ///    mean luma is `>= 38`;
+  ///  - at least 5 of its 9 (3x3) neighbors are also near-black
+  ///    (`luma <= 22`), which rejects thin microphone arms, frame borders
+  ///    and text overlays.
   ///
-  /// Returns `null` when no credible subject exists (e.g. a flat empty wall),
-  /// otherwise the weighted centroid of the dominant cluster with its `y`
-  /// biased to the head/upper-torso level (`top + 0.32 * height`).
+  /// The gradient/motion heuristics are GONE: sharp edges and motion are
+  /// studio-wide properties (tables, props, decorations) and must never mark
+  /// a person.
+  ///
+  /// Human-torso guards then apply: the largest 4-connected cluster must be
+  /// 6%..48% of the grid, anchored low (`bottom >= 0.65h`), reaching into the
+  /// upper frame (`top <= 0.55h`), at least `0.22h` tall and `0.10w` wide —
+  /// otherwise `null` (wide shots, empty walls, props).
+  ///
+  /// On success `normX` is the centroid of the cluster's UPPER half
+  /// (head/shoulders, not the chair/armrest) and
+  /// `normY = (top + clusterHeight * 0.28) / height`.
   static SilhouetteSubject? detectSilhouetteOrMotionSubject(
     Uint8List rgbaBytes,
     int width,
@@ -656,13 +726,10 @@ class FaceDetectionService {
     }
     final meanLuma = lumaSum / count;
 
-    // Scene-change score against the previous grid.
+    // Scene-change score against the previous grid (identity must never
+    // carry over a hard cut).
     var sceneChanged = false;
-    Int32List? prevLuma;
-    final hasPrev =
-        prevRgbaBytes != null && prevRgbaBytes.length >= count * 4;
-    if (hasPrev) {
-      prevLuma = Int32List(count);
+    if (prevRgbaBytes != null && prevRgbaBytes.length >= count * 4) {
       var diffSum = 0;
       for (var i = 0; i < count; i++) {
         final o = i * 4;
@@ -671,76 +738,75 @@ class FaceDetectionService {
                     150 * prevRgbaBytes[o + 1] +
                     29 * prevRgbaBytes[o + 2]) >>
                 8;
-        prevLuma[i] = l;
         diffSum += (luma[i] - l).abs();
       }
       sceneChanged = diffSum / count > silhouetteSceneChangeThreshold;
     }
 
-    // Foreground weight map over the search region.
+    // Search region for the seated silhouette.
     final x0 = (silhouetteRegionX0 * width).ceil();
     final x1 = (silhouetteRegionX1 * width).floor();
     final y0 = (silhouetteRegionY0 * height).ceil();
     final y1 = (silhouetteRegionY1 * height).floor();
     if (x1 - x0 < 3 || y1 - y0 < 3) return null;
+    if (meanLuma < silhouetteMinBackgroundLuma) {
+      // Dark scene: no bright studio background to mask against.
+      return null;
+    }
 
-    final weights = Float32List(count);
-    var maxWeight = 0.0;
-    final useMotion = hasPrev && !sceneChanged;
-
+    // Strict pitch-black mask + 3x3 neighborhood uniformity.
+    final mask = Uint8List(count);
     for (var gy = y0; gy <= y1; gy++) {
       for (var gx = x0; gx <= x1; gx++) {
         final i = gy * width + gx;
         final l = luma[i];
-        var w = 0.0;
+        if (l > silhouetteMaxLuma) continue;
 
-        // Blacked-out silhouette on a bright background.
-        if (meanLuma > 45 && l < 28) w += 2.0;
-
-        // Sharp foreground edge against the blurred studio background.
-        var gradient = 0;
-        if (gx + 1 < width) gradient += (l - luma[i + 1]).abs();
-        if (gy + 1 < height) gradient += (l - luma[i + width]).abs();
-        if (gradient > 30) w += min(gradient / 60.0, 1.5);
-
-        // Frame-to-frame subject motion (only inside a stable shot).
-        if (useMotion) {
-          final motion = (l - prevLuma![i]).abs();
-          if (motion > 14) w += min(motion / 48.0, 1.5) * 1.2;
+        final o = i * 4;
+        final hi = max(rgbaBytes[o], max(rgbaBytes[o + 1], rgbaBytes[o + 2]));
+        final lo = min(rgbaBytes[o], min(rgbaBytes[o + 1], rgbaBytes[o + 2]));
+        if (hi - lo > silhouetteMaxChannelSpread) {
+          continue; // colored decor/wood is not an anonymization mask
         }
 
-        if (w > 0) {
-          weights[i] = w;
-          if (w > maxWeight) maxWeight = w;
+        // Reject thin structures (mic arms, borders, text): most of the 3x3
+        // window must be near-black too.
+        var darkNeighbors = 0;
+        for (var ny = gy - 1; ny <= gy + 1; ny++) {
+          if (ny < 0 || ny >= height) continue;
+          for (var nx = gx - 1; nx <= gx + 1; nx++) {
+            if (nx < 0 || nx >= width) continue;
+            if (luma[ny * width + nx] <= silhouetteNeighborhoodLuma) {
+              darkNeighbors++;
+            }
+          }
         }
+        if (darkNeighbors >= 5) mask[i] = 1;
       }
     }
-    if (maxWeight < 1.0) return null; // flat empty frame: nothing to follow
 
-    // Dominant 4-connected cluster above 40% of the peak weight.
-    final threshold = max(1.0, maxWeight * 0.4);
+    // Largest 4-connected pitch-black cluster inside the search region.
     final visited = Uint8List(count);
-    var bestMass = 0.0;
     var bestCells = 0;
-    var bestSumX = 0.0;
     var bestTop = 0;
     var bestBottom = 0;
     var bestLeft = 0;
     var bestRight = 0;
+    var bestUpperSumX = 0.0;
+    var bestUpperCells = 1;
     final stack = <int>[];
 
     for (var gy = y0; gy <= y1; gy++) {
       for (var gx = x0; gx <= x1; gx++) {
         final start = gy * width + gx;
-        if (visited[start] != 0 || weights[start] < threshold) continue;
+        if (visited[start] != 0 || mask[start] == 0) continue;
 
-        var mass = 0.0;
         var cells = 0;
-        var sumX = 0.0;
         var top = gy;
         var bottom = gy;
         var left = gx;
         var right = gx;
+        final members = <int>[];
         stack
           ..clear()
           ..add(start);
@@ -748,12 +814,10 @@ class FaceDetectionService {
 
         while (stack.isNotEmpty) {
           final index = stack.removeLast();
+          members.add(index);
           final cy = index ~/ width;
           final cx = index % width;
-          final w = weights[index];
-          mass += w;
           cells++;
-          sumX += cx * w;
           if (cy < top) top = cy;
           if (cy > bottom) bottom = cy;
           if (cx < left) left = cx;
@@ -765,47 +829,91 @@ class FaceDetectionService {
             final ny = cy + dy;
             if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
             final neighbor = ny * width + nx;
-            if (visited[neighbor] != 0 || weights[neighbor] < threshold) {
-              continue;
-            }
+            if (visited[neighbor] != 0 || mask[neighbor] == 0) continue;
             visited[neighbor] = 1;
             stack.add(neighbor);
           }
         }
 
-        if (mass > bestMass) {
-          bestMass = mass;
+        if (cells > bestCells) {
           bestCells = cells;
-          bestSumX = sumX;
           bestTop = top;
           bestBottom = bottom;
           bestLeft = left;
           bestRight = right;
+          // Horizontal centroid of the UPPER half: head and shoulders, not
+          // the chair or the armrest.
+          final clusterHeight = bottom - top + 1;
+          final upperBound = top + clusterHeight ~/ 2;
+          var upperSumX = 0.0;
+          var upperCells = 0;
+          for (final index in members) {
+            if (index ~/ width < upperBound) {
+              upperSumX += index % width;
+              upperCells++;
+            }
+          }
+          bestUpperSumX = upperSumX;
+          bestUpperCells = max(upperCells, 1);
         }
       }
     }
 
-    // Credibility guards: a person-sized cluster, not a stray dark glyph.
+    // Human-torso credibility guards: reject props, decorations and wide
+    // empty shots instead of locking the camera onto them.
     final clusterHeight = bestBottom - bestTop + 1;
     final clusterWidth = bestRight - bestLeft + 1;
-    if (bestMass < 6.0 ||
-        bestCells < 12 ||
-        clusterHeight < height * 0.06 ||
-        clusterWidth < 3) {
+    if (bestCells < count * silhouetteMinClusterFraction ||
+        bestCells > count * silhouetteMaxClusterFraction ||
+        bestBottom < height * silhouetteMinBottomFraction ||
+        bestTop > height * silhouetteMaxTopFraction ||
+        clusterHeight < height * silhouetteMinHeightFraction ||
+        clusterWidth < width * silhouetteMinWidthFraction) {
       return null;
     }
 
-    final normX = ((bestSumX / bestMass) + 0.5) / width;
+    final normX = (bestUpperSumX / bestUpperCells + 0.5) / width;
     // Bias Y to the head / upper-torso of the cluster.
-    final normY = (bestTop + clusterHeight * 0.32) / height;
+    final normY = (bestTop + clusterHeight * 0.28) / height;
     return (
       normX: normX.clamp(0.0, 1.0),
       normY: normY.clamp(0.0, 1.0),
       normW: (clusterWidth / width).clamp(0.04, 1.0),
       normH: (clusterHeight / height).clamp(0.04, 1.0),
-      mass: bestMass,
+      mass: bestCells.toDouble(),
       sceneChanged: sceneChanged,
     );
+  }
+
+  /// Mean-absolute-luma scene-change check between two analysis grids, usable
+  /// by the caller even when [detectSilhouetteOrMotionSubject] found nothing
+  /// (a cut to an empty wall must still reset the camera to center).
+  static bool isSceneChange(
+    Uint8List? prevRgbaBytes,
+    Uint8List rgbaBytes,
+    int width,
+    int height,
+  ) {
+    final count = width * height;
+    if (prevRgbaBytes == null ||
+        prevRgbaBytes.length < count * 4 ||
+        rgbaBytes.length < count * 4) {
+      return false;
+    }
+    var diffSum = 0;
+    for (var i = 0; i < count; i++) {
+      final o = i * 4;
+      final l =
+          (77 * rgbaBytes[o] + 150 * rgbaBytes[o + 1] + 29 * rgbaBytes[o + 2]) >>
+              8;
+      final p =
+          (77 * prevRgbaBytes[o] +
+                  150 * prevRgbaBytes[o + 1] +
+                  29 * prevRgbaBytes[o + 2]) >>
+              8;
+      diffSum += (l - p).abs();
+    }
+    return diffSum / count > silhouetteSceneChangeThreshold;
   }
 
   /// Associates a detected foreground subject with a recently-seen track by
@@ -1006,32 +1114,54 @@ class FaceDetectionService {
 
   /// Groups tracks into people (a person re-detected after a cut may own more
   /// than one track) and labels them left-to-right.
+  /// At most this many people are exposed to the speaker-chip UI; beyond that
+  /// the extra "profiles" were fragments, not people.
+  static const int maxProfiles = 4;
+
+  /// Horizontal distance (normalized) under which two face tracks count as
+  /// the same person.
+  static const double profileMergeDistance = 0.18;
+
+  /// Builds the real people of the video:
+  ///  - a track must be seen often enough (>= max(3, frames/30) hits) —
+  ///    single-frame flickers are noise, not people;
+  ///  - face tracks are merged into one person when their average X is within
+  ///    [profileMergeDistance] and they are the same kind (face vs
+  ///    silhouette), which absorbs the fragmented tracks ML Kit produces when
+  ///    a person briefly leaves the frame;
+  ///  - only the top [maxProfiles] people by presence are returned.
   static List<DetectedSpeakerProfile> _buildProfiles(
-    Map<int, _SpeakerTrack> tracks,
-  ) {
-    final used = tracks.values.where((t) => t.points.length >= 2).toList();
+    Map<int, _SpeakerTrack> tracks, {
+    required int frameCount,
+  }) {
+    final minHits = max(3, frameCount ~/ 30);
+    final used = tracks.values
+        .where((t) => t.points.length >= 2 && t.hits >= minHits)
+        .toList();
     if (used.isEmpty) return const [];
 
-    double avgOf(List<_SpeakerTrack> group, {required bool x}) {
+    double avgXOf(List<_SpeakerTrack> group) {
       var total = 0.0;
       var count = 0;
       for (final track in group) {
         for (final point in track.points) {
-          total += x ? point.normX : point.normY;
+          total += point.normX;
           count++;
         }
       }
       return count == 0 ? 0.5 : total / count;
     }
 
+    int hitsOf(List<_SpeakerTrack> group) =>
+        group.fold(0, (sum, track) => sum + track.hits);
+
     final groups = <List<_SpeakerTrack>>[];
     for (final track in used) {
-      final trackX = avgOf([track], x: true);
-      final trackY = avgOf([track], x: false);
+      final trackX = avgXOf([track]);
       List<_SpeakerTrack>? target;
       for (final group in groups) {
-        if ((trackX - avgOf(group, x: true)).abs() < 0.12 &&
-            (trackY - avgOf(group, x: false)).abs() < 0.12) {
+        if (group.first.isSilhouette == track.isSilhouette &&
+            (trackX - avgXOf(group)).abs() < profileMergeDistance) {
           target = group;
           break;
         }
@@ -1043,13 +1173,17 @@ class FaceDetectionService {
       }
     }
 
-    groups.sort((a, b) => avgOf(a, x: true).compareTo(avgOf(b, x: true)));
+    // Keep the most-present people only, then order left-to-right so the
+    // labels stay stable.
+    groups.sort((a, b) => hitsOf(b).compareTo(hitsOf(a)));
+    final kept = groups.take(maxProfiles).toList()
+      ..sort((a, b) => avgXOf(a).compareTo(avgXOf(b)));
 
     final profiles = <DetectedSpeakerProfile>[];
     final usedLabels = <String>{};
-    for (var i = 0; i < groups.length; i++) {
+    for (var i = 0; i < kept.length; i++) {
       final points = <FaceTrackPoint>[];
-      for (final track in groups[i]) {
+      for (final track in kept[i]) {
         points.addAll(track.points);
       }
       points.sort((a, b) => a.timeSec.compareTo(b.timeSec));
@@ -1061,9 +1195,9 @@ class FaceDetectionService {
         yTotal += point.normY;
       }
 
-      String label = groups[i].any((t) => t.isSilhouette)
+      String label = kept[i].any((t) => t.isSilhouette)
           ? 'Silhouette / Subject'
-          : _speakerLabel(i, groups.length);
+          : _speakerLabel(i, kept.length);
       if (usedLabels.contains(label) && label.startsWith('Silhouette')) {
         var suffix = 2;
         while (usedLabels.contains('$label $suffix')) {
@@ -1147,9 +1281,17 @@ class FaceDetectionService {
   // Camera stabilization (pure, unit-testable)
   // ---------------------------------------------------------------------------
 
-  /// Shot-aware stabilization: splits the raw trajectory into continuous
-  /// single-speaker segments, smooths each one **independently**, and joins
-  /// them with an instant cut (two keyframes 1ms apart).
+  /// Shot-aware keyframes: splits the raw trajectory into continuous
+  /// single-speaker/shot segments and smooths each one **independently**.
+  ///
+  /// A steady shot (every sample within [shotSteadyTolerance] of its median —
+  /// the interview/podcast default) collapses to ONE clean keyframe at the
+  /// shot start with `isCut: true`, so a typical video yields 6-12 exact
+  /// shot-change markers instead of dozens of noisy RDP points. A shot where
+  /// the speaker genuinely travels (>~0.14 across the frame) keeps smooth
+  /// intermediate keyframes (`isCut: false`; only the shot entry is a cut).
+  /// Cuts are expressed by `isCut` flags — the explicit 1ms FFmpeg step pairs
+  /// are materialized later by [materializeKeyframesForFfmpeg].
   static List<FaceTrackPoint> buildKeyframes(
     List<FaceTrackPoint> rawPoints, {
     double deadZone = defaultDeadZone,
@@ -1158,11 +1300,7 @@ class FaceDetectionService {
   }) {
     if (rawPoints.isEmpty) return const [];
 
-    // A 1-2 sample track carries no shot structure: jump detection on it would
-    // invent cuts, so it stays one segment.
-    var ranges = rawPoints.length <= 2
-        ? <(int, int)>[(0, rawPoints.length)]
-        : _splitSegments(rawPoints, speakerJumpThreshold);
+    var ranges = _splitSegments(rawPoints, speakerJumpThreshold);
     if (ranges.length * 3 > maxKeyframes) {
       // Too many cuts for the budget: relax the cut detector rather than
       // starving every segment of keyframes.
@@ -1180,11 +1318,34 @@ class FaceDetectionService {
         deadZone,
         smoothness,
       );
+      if (segment.isEmpty) continue;
+
+      // Steady shot: collapse the whole segment into ONE clean keyframe.
+      final median = _medianOf(segment);
+      var maxDevX = 0.0;
+      var maxDevY = 0.0;
+      for (final point in segment) {
+        final dx = (point.normX - median.$1).abs();
+        final dy = (point.normY - median.$2).abs();
+        if (dx > maxDevX) maxDevX = dx;
+        if (dy > maxDevY) maxDevY = dy;
+      }
+      if (maxDevX <= shotSteadyTolerance && maxDevY <= shotSteadyTolerance) {
+        out.add(
+          FaceTrackPoint(
+            timeSec: rawPoints[start].timeSec,
+            normX: median.$1,
+            normY: median.$2,
+            isCut: true,
+          ),
+        );
+        continue;
+      }
+
+      // Genuine travel across one shot: keep smooth intermediate keyframes.
       final budget = max(2, (available * (end - start)) ~/ total);
       final simplified = _simplifySegment(segment, budget);
-
       if (out.isNotEmpty && simplified.isNotEmpty) {
-        _appendInstantCut(out, simplified.first);
         // The first point of a new shot is a cut target: flag it so the editor
         // and FFmpeg see an instant snap instead of a pan through the gap.
         simplified[0] = simplified.first.copyWith(isCut: true);
@@ -1197,12 +1358,25 @@ class FaceDetectionService {
     );
   }
 
+  /// Per-axis medians of a segment — robust against the occasional outlier
+  /// sample a mean would follow.
+  static (double, double) _medianOf(List<FaceTrackPoint> points) {
+    final xs = points.map((p) => p.normX).toList()..sort();
+    final ys = points.map((p) => p.normY).toList()..sort();
+    final mid = xs.length ~/ 2;
+    final medX = xs.length.isOdd ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+    final medY = ys.length.isOdd ? ys[mid] : (ys[mid - 1] + ys[mid]) / 2;
+    return (medX, medY);
+  }
+
   // ---------------------------------------------------------------------------
   // Cut semantics + manual keyframe editing
   // ---------------------------------------------------------------------------
 
-  /// Default tolerance (seconds) for "the keyframe at the playhead" updates.
-  static const double manualKeyframeToleranceSec = 0.35;
+  /// Default tolerance (seconds) for "the keyframe at the playhead" updates:
+  /// tight enough that two distinct keyframes a beat apart stay distinct
+  /// (CapCut-style single-button add/remove relies on this).
+  static const double manualKeyframeToleranceSec = 0.25;
 
   /// Whether the transition `a -> b` is an instant jump cut.
   ///

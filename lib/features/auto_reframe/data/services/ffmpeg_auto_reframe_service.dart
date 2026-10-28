@@ -92,9 +92,15 @@ class FfmpegAutoReframeService {
       final span = (b.timeSec - a.timeSec).abs() < 0.001
           ? 0.001
           : b.timeSec - a.timeSec;
+      // Clamp `t` into this segment so times BEFORE the first keyframe or
+      // AFTER the last one HOLD the edge position instead of extrapolating
+      // linearly to absurd coordinates (the last shot's keyframe sits at
+      // that shot's start, so the tail of the video is "beyond the last").
       return '${valueOf(a).toStringAsFixed(4)}+'
           '(${valueOf(b).toStringAsFixed(4)}-${valueOf(a).toStringAsFixed(4)})'
-          '*(t-${a.timeSec.toStringAsFixed(3)})/${span.toStringAsFixed(3)}';
+          '*(min(max(t\\,${a.timeSec.toStringAsFixed(3)})'
+          '\\,${b.timeSec.toStringAsFixed(3)})'
+          '-${a.timeSec.toStringAsFixed(3)})/${span.toStringAsFixed(3)}';
     }
 
     final mid = (start + end) >> 1;
