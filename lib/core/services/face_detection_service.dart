@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
@@ -19,16 +20,42 @@ class FaceTrackPoint {
   final double normX;
   final double normY;
 
+  /// `true` → the transition from the previous keyframe to this one is an
+  /// **instant jump cut** (1ms step); `false` → smooth linear interpolation.
+  final bool isCut;
+
+  /// `true` when the user added/edited this keyframe in the manual editor.
+  final bool isManual;
+
   const FaceTrackPoint({
     required this.timeSec,
     this.normX = 0.5,
     this.normY = 0.42,
+    this.isCut = false,
+    this.isManual = false,
   });
+
+  FaceTrackPoint copyWith({
+    double? timeSec,
+    double? normX,
+    double? normY,
+    bool? isCut,
+    bool? isManual,
+  }) {
+    return FaceTrackPoint(
+      timeSec: timeSec ?? this.timeSec,
+      normX: normX ?? this.normX,
+      normY: normY ?? this.normY,
+      isCut: isCut ?? this.isCut,
+      isManual: isManual ?? this.isManual,
+    );
+  }
 
   @override
   String toString() =>
       'FaceTrackPoint(t=${timeSec.toStringAsFixed(3)}, '
-      'x=${normX.toStringAsFixed(3)}, y=${normY.toStringAsFixed(3)})';
+      'x=${normX.toStringAsFixed(3)}, y=${normY.toStringAsFixed(3)}'
+      '${isCut ? ', CUT' : ''}${isManual ? ', manual' : ''})';
 }
 
 /// One detected person, locked across the whole clip.
@@ -89,9 +116,18 @@ class FaceTrackResult {
     this.sourceHeight = 0,
   });
 
-  /// Linearly interpolated speaker position at [timeSec], for the live preview
-  /// overlay. Speaker switches are step transitions, never interpolations.
-  (double normX, double normY) sampleAt(double timeSec) {
+  /// Interpolated speaker position at [timeSec], for the live preview overlay.
+  ///
+  /// Honors [FaceTrackPoint.isCut]: a cut keyframe holds the previous position
+  /// until its timestamp and snaps immediately at `timeSec >= b.timeSec`.
+  (double normX, double normY) sampleAt(double timeSec) =>
+      sampleKeyframes(keyframes, timeSec);
+
+  /// [sampleAt] over any keyframe list (used by the manual editor too).
+  static (double normX, double normY) sampleKeyframes(
+    List<FaceTrackPoint> keyframes,
+    double timeSec,
+  ) {
     if (keyframes.isEmpty) return (0.5, 0.42);
     if (keyframes.length == 1) {
       return (keyframes.first.normX, keyframes.first.normY);
@@ -109,6 +145,12 @@ class FaceTrackResult {
       if (timeSec >= a.timeSec && timeSec <= b.timeSec) {
         final span = b.timeSec - a.timeSec;
         if (span <= 0) return (b.normX, b.normY);
+        if (FaceDetectionService.isEffectiveCut(a, b)) {
+          // Instant cut: hold `a` right up to (but excluding) `b.timeSec`.
+          return timeSec < b.timeSec
+              ? (a.normX, a.normY)
+              : (b.normX, b.normY);
+        }
         final f = ((timeSec - a.timeSec) / span).clamp(0.0, 1.0);
         return (
           a.normX + (b.normX - a.normX) * f,
@@ -138,6 +180,10 @@ class _SpeakerTrack {
   double? lastOpen;
   double? lastWidth;
 
+  /// Track observed through the silhouette/motion fallback (ML Kit saw no
+  /// face). Cleared as soon as a real face is associated with this track.
+  bool isSilhouette = false;
+
   /// Rolling window of the last 4 lip deltas.
   final List<double> lipDeltas = <double>[];
 
@@ -162,6 +208,18 @@ class _SpeakerTrack {
   double get score =>
       recentActivity * 2.0 + areaNorm + 0.05 * (min(hits, 10) / 10);
 }
+
+/// Foreground-subject observation produced by
+/// [FaceDetectionService.detectSilhouetteOrMotionSubject] when ML Kit finds no
+/// face (pitch-black silhouette guest, occluded/partially visible speaker).
+typedef SilhouetteSubject = ({
+  double normX,
+  double normY,
+  double normW,
+  double normH,
+  double mass,
+  bool sceneChanged,
+});
 
 /// Real ML Kit + FFmpeg speaker tracking.
 ///
@@ -287,6 +345,8 @@ class FaceDetectionService {
       final tracks = <int, _SpeakerTrack>{};
       final activePoints = <FaceTrackPoint>[];
       var facesDetectedCount = 0;
+      var silhouetteHits = 0;
+      Uint8List? prevGridBytes;
       _SpeakerTrack? currentSpeaker;
       var lastX = 0.5;
       var lastY = 0.42;
@@ -335,12 +395,67 @@ class FaceDetectionService {
             continue;
           }
 
+          // A real ML Kit face proves this is a visible person: retire any
+          // silhouette flag this track may have carried.
+          track.isSilhouette = false;
           _updateTrack(track, timeSec, cx, cy, nx1 - nx0, ny1 - ny0);
           _updateLipActivity(track, face, box);
           track.points.add(
             FaceTrackPoint(timeSec: timeSec, normX: cx, normY: cy),
           );
           present.add(track);
+        }
+
+        if (faces.isEmpty) {
+          // Blacked-out silhouette guest or partially hidden speaker: ML Kit
+          // found nothing, so look for a dark/edgy/moving foreground subject
+          // instead of blindly holding the previous shot's camera position.
+          final grid = await _analysisGrid(frames[i].path);
+          if (grid != null) {
+            final subject = detectSilhouetteOrMotionSubject(
+              grid,
+              silhouetteGridWidth,
+              silhouetteGridHeight,
+              prevGridBytes,
+            );
+            prevGridBytes = grid;
+            if (subject != null) {
+              silhouetteHits++;
+              final matched = _associateSubject(
+                tracks,
+                nowSec: timeSec,
+                normX: subject.normX,
+                normY: subject.normY,
+                // A hard scene cut starts a new identity: never inherit the
+                // previous shot's person.
+                allowExisting: !subject.sceneChanged,
+              );
+              _SpeakerTrack subjectTrack;
+              if (matched == null) {
+                subjectTrack = _SpeakerTrack(tracks.length)
+                  ..isSilhouette = true;
+                tracks[subjectTrack.id] = subjectTrack;
+              } else {
+                subjectTrack = matched;
+              }
+              _updateTrack(
+                subjectTrack,
+                timeSec,
+                subject.normX,
+                subject.normY,
+                subject.normW,
+                subject.normH,
+              );
+              subjectTrack.points.add(
+                FaceTrackPoint(
+                  timeSec: timeSec,
+                  normX: subject.normX,
+                  normY: subject.normY,
+                ),
+              );
+              present.add(subjectTrack);
+            }
+          }
         }
 
         currentSpeaker = _selectSpeaker(
@@ -352,7 +467,7 @@ class FaceDetectionService {
           lastX = currentSpeaker.normX;
           lastY = currentSpeaker.normY;
         }
-        // A frame without faces holds the last camera position.
+        // A frame without any detected subject holds the last camera position.
         activePoints.add(
           FaceTrackPoint(timeSec: timeSec, normX: lastX, normY: lastY),
         );
@@ -365,8 +480,12 @@ class FaceDetectionService {
         }
       }
 
-      if (facesDetectedCount == 0 || activePoints.isEmpty) {
-        AppLogger().i('FaceTrack: no faces detected in ${frames.length} frames');
+      if ((facesDetectedCount == 0 && silhouetteHits == 0) ||
+          activePoints.isEmpty) {
+        AppLogger().i(
+          'FaceTrack: no faces and no foreground subject in '
+          '${frames.length} frames',
+        );
         return null;
       }
 
@@ -428,6 +547,291 @@ class FaceDetectionService {
     track.normY = cy;
     track.normW = w.clamp(0.0, 1.0);
     track.normH = h.clamp(0.0, 1.0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Silhouette / occluded-speaker fallback
+  // ---------------------------------------------------------------------------
+
+  /// Analysis-grid size for the silhouette fallback (fast: 3.6k cells).
+  static const int silhouetteGridWidth = 80;
+  static const int silhouetteGridHeight = 45;
+
+  /// Mean absolute luma difference (0..255) above which two grids count as a
+  /// scene cut (motion scoring is then invalid).
+  static const double silhouetteSceneChangeThreshold = 16.0;
+
+  /// Normalized search region for foreground subjects (keeps out letterbox
+  /// bars, lower-third graphics and playback chrome).
+  static const double silhouetteRegionX0 = 0.08;
+  static const double silhouetteRegionX1 = 0.92;
+  static const double silhouetteRegionY0 = 0.15;
+  static const double silhouetteRegionY1 = 0.85;
+
+  /// Decodes one analysis JPEG into an RGBA
+  /// [silhouetteGridWidth] x [silhouetteGridHeight] grid (nearest-neighbour
+  /// downsample). Returns `null` when the frame cannot be decoded.
+  static Future<Uint8List?> _analysisGrid(String path) async {
+    try {
+      final image = await _decodeImage(File(path));
+      try {
+        final byteData = await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
+        if (byteData == null || image.width <= 0 || image.height <= 0) {
+          return null;
+        }
+        final full = byteData.buffer.asUint8List(
+          byteData.offsetInBytes,
+          byteData.lengthInBytes,
+        );
+        final grid = Uint8List(silhouetteGridWidth * silhouetteGridHeight * 4);
+        for (var gy = 0; gy < silhouetteGridHeight; gy++) {
+          final sy = min(
+            gy * image.height ~/ silhouetteGridHeight,
+            image.height - 1,
+          );
+          for (var gx = 0; gx < silhouetteGridWidth; gx++) {
+            final sx = min(
+              gx * image.width ~/ silhouetteGridWidth,
+              image.width - 1,
+            );
+            final src = (sy * image.width + sx) * 4;
+            final dst = (gy * silhouetteGridWidth + gx) * 4;
+            grid[dst] = full[src];
+            grid[dst + 1] = full[src + 1];
+            grid[dst + 2] = full[src + 2];
+            grid[dst + 3] = full[src + 3];
+          }
+        }
+        return grid;
+      } finally {
+        image.dispose();
+      }
+    } catch (e) {
+      AppLogger().e('FaceTrack: analysis grid decode failed', e);
+      return null;
+    }
+  }
+
+  /// Finds the dominant foreground subject in a frame where ML Kit returned
+  /// **no faces** (pitch-black silhouette guest, occluded/partially visible
+  /// speaker).
+  ///
+  /// [rgbaBytes] is a raw RGBA grid of `width x height` cells (the service
+  /// uses 80x45); [prevRgbaBytes] is the previous decoded grid, used for the
+  /// scene-change score and the frame-to-frame motion term.
+  ///
+  /// Weights per cell inside the search region:
+  ///  - very dark pixels (`luma < 28`) on a bright studio background
+  ///    (`globalMean > 45`) — the blacked-out silhouette guest;
+  ///  - high local spatial gradient — sharp foreground edge against the
+  ///    out-of-focus blurred studio background;
+  ///  - `|luma - prevLuma|` motion (head/hand/shoulder movement), skipped when
+  ///    the frame is a scene cut.
+  ///
+  /// Returns `null` when no credible subject exists (e.g. a flat empty wall),
+  /// otherwise the weighted centroid of the dominant cluster with its `y`
+  /// biased to the head/upper-torso level (`top + 0.32 * height`).
+  static SilhouetteSubject? detectSilhouetteOrMotionSubject(
+    Uint8List rgbaBytes,
+    int width,
+    int height,
+    Uint8List? prevRgbaBytes,
+  ) {
+    if (width <= 2 || height <= 2) return null;
+    final count = width * height;
+    if (rgbaBytes.length < count * 4) return null;
+
+    // Luma pyramid.
+    final luma = Int32List(count);
+    var lumaSum = 0;
+    for (var i = 0; i < count; i++) {
+      final o = i * 4;
+      final l =
+          (77 * rgbaBytes[o] + 150 * rgbaBytes[o + 1] + 29 * rgbaBytes[o + 2]) >>
+          8;
+      luma[i] = l;
+      lumaSum += l;
+    }
+    final meanLuma = lumaSum / count;
+
+    // Scene-change score against the previous grid.
+    var sceneChanged = false;
+    Int32List? prevLuma;
+    final hasPrev =
+        prevRgbaBytes != null && prevRgbaBytes.length >= count * 4;
+    if (hasPrev) {
+      prevLuma = Int32List(count);
+      var diffSum = 0;
+      for (var i = 0; i < count; i++) {
+        final o = i * 4;
+        final l =
+            (77 * prevRgbaBytes[o] +
+                    150 * prevRgbaBytes[o + 1] +
+                    29 * prevRgbaBytes[o + 2]) >>
+                8;
+        prevLuma[i] = l;
+        diffSum += (luma[i] - l).abs();
+      }
+      sceneChanged = diffSum / count > silhouetteSceneChangeThreshold;
+    }
+
+    // Foreground weight map over the search region.
+    final x0 = (silhouetteRegionX0 * width).ceil();
+    final x1 = (silhouetteRegionX1 * width).floor();
+    final y0 = (silhouetteRegionY0 * height).ceil();
+    final y1 = (silhouetteRegionY1 * height).floor();
+    if (x1 - x0 < 3 || y1 - y0 < 3) return null;
+
+    final weights = Float32List(count);
+    var maxWeight = 0.0;
+    final useMotion = hasPrev && !sceneChanged;
+
+    for (var gy = y0; gy <= y1; gy++) {
+      for (var gx = x0; gx <= x1; gx++) {
+        final i = gy * width + gx;
+        final l = luma[i];
+        var w = 0.0;
+
+        // Blacked-out silhouette on a bright background.
+        if (meanLuma > 45 && l < 28) w += 2.0;
+
+        // Sharp foreground edge against the blurred studio background.
+        var gradient = 0;
+        if (gx + 1 < width) gradient += (l - luma[i + 1]).abs();
+        if (gy + 1 < height) gradient += (l - luma[i + width]).abs();
+        if (gradient > 30) w += min(gradient / 60.0, 1.5);
+
+        // Frame-to-frame subject motion (only inside a stable shot).
+        if (useMotion) {
+          final motion = (l - prevLuma![i]).abs();
+          if (motion > 14) w += min(motion / 48.0, 1.5) * 1.2;
+        }
+
+        if (w > 0) {
+          weights[i] = w;
+          if (w > maxWeight) maxWeight = w;
+        }
+      }
+    }
+    if (maxWeight < 1.0) return null; // flat empty frame: nothing to follow
+
+    // Dominant 4-connected cluster above 40% of the peak weight.
+    final threshold = max(1.0, maxWeight * 0.4);
+    final visited = Uint8List(count);
+    var bestMass = 0.0;
+    var bestCells = 0;
+    var bestSumX = 0.0;
+    var bestTop = 0;
+    var bestBottom = 0;
+    var bestLeft = 0;
+    var bestRight = 0;
+    final stack = <int>[];
+
+    for (var gy = y0; gy <= y1; gy++) {
+      for (var gx = x0; gx <= x1; gx++) {
+        final start = gy * width + gx;
+        if (visited[start] != 0 || weights[start] < threshold) continue;
+
+        var mass = 0.0;
+        var cells = 0;
+        var sumX = 0.0;
+        var top = gy;
+        var bottom = gy;
+        var left = gx;
+        var right = gx;
+        stack
+          ..clear()
+          ..add(start);
+        visited[start] = 1;
+
+        while (stack.isNotEmpty) {
+          final index = stack.removeLast();
+          final cy = index ~/ width;
+          final cx = index % width;
+          final w = weights[index];
+          mass += w;
+          cells++;
+          sumX += cx * w;
+          if (cy < top) top = cy;
+          if (cy > bottom) bottom = cy;
+          if (cx < left) left = cx;
+          if (cx > right) right = cx;
+
+          const deltas = <(int, int)>[(-1, 0), (1, 0), (0, -1), (0, 1)];
+          for (final (dx, dy) in deltas) {
+            final nx = cx + dx;
+            final ny = cy + dy;
+            if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
+            final neighbor = ny * width + nx;
+            if (visited[neighbor] != 0 || weights[neighbor] < threshold) {
+              continue;
+            }
+            visited[neighbor] = 1;
+            stack.add(neighbor);
+          }
+        }
+
+        if (mass > bestMass) {
+          bestMass = mass;
+          bestCells = cells;
+          bestSumX = sumX;
+          bestTop = top;
+          bestBottom = bottom;
+          bestLeft = left;
+          bestRight = right;
+        }
+      }
+    }
+
+    // Credibility guards: a person-sized cluster, not a stray dark glyph.
+    final clusterHeight = bestBottom - bestTop + 1;
+    final clusterWidth = bestRight - bestLeft + 1;
+    if (bestMass < 6.0 ||
+        bestCells < 12 ||
+        clusterHeight < height * 0.06 ||
+        clusterWidth < 3) {
+      return null;
+    }
+
+    final normX = ((bestSumX / bestMass) + 0.5) / width;
+    // Bias Y to the head / upper-torso of the cluster.
+    final normY = (bestTop + clusterHeight * 0.32) / height;
+    return (
+      normX: normX.clamp(0.0, 1.0),
+      normY: normY.clamp(0.0, 1.0),
+      normW: (clusterWidth / width).clamp(0.04, 1.0),
+      normH: (clusterHeight / height).clamp(0.04, 1.0),
+      mass: bestMass,
+      sceneChanged: sceneChanged,
+    );
+  }
+
+  /// Associates a detected foreground subject with a recently-seen track by
+  /// center distance. Never matches across a scene cut (a hard cut starts a
+  /// fresh identity), and never matches stale tracks.
+  static _SpeakerTrack? _associateSubject(
+    Map<int, _SpeakerTrack> tracks, {
+    required double nowSec,
+    required double normX,
+    required double normY,
+    required bool allowExisting,
+  }) {
+    if (!allowExisting) return null;
+    _SpeakerTrack? nearest;
+    var bestDistance = associationDistance;
+    for (final track in tracks.values) {
+      if (nowSec - track.lastSeenSec > 2.5) continue;
+      final dx = track.normX - normX;
+      final dy = track.normY - normY;
+      final distance = sqrt(dx * dx + dy * dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        nearest = track;
+      }
+    }
+    return nearest;
   }
 
   /// True lip/speech activity: frame-to-frame change of mouth geometry
@@ -642,6 +1046,7 @@ class FaceDetectionService {
     groups.sort((a, b) => avgOf(a, x: true).compareTo(avgOf(b, x: true)));
 
     final profiles = <DetectedSpeakerProfile>[];
+    final usedLabels = <String>{};
     for (var i = 0; i < groups.length; i++) {
       final points = <FaceTrackPoint>[];
       for (final track in groups[i]) {
@@ -656,10 +1061,22 @@ class FaceDetectionService {
         yTotal += point.normY;
       }
 
+      String label = groups[i].any((t) => t.isSilhouette)
+          ? 'Silhouette / Subject'
+          : _speakerLabel(i, groups.length);
+      if (usedLabels.contains(label) && label.startsWith('Silhouette')) {
+        var suffix = 2;
+        while (usedLabels.contains('$label $suffix')) {
+          suffix++;
+        }
+        label = '$label $suffix';
+      }
+      usedLabels.add(label);
+
       profiles.add(
         DetectedSpeakerProfile(
           id: i,
-          label: _speakerLabel(i, groups.length),
+          label: label,
           avgNormX: xTotal / points.length,
           avgNormY: yTotal / points.length,
           rawPoints: List<FaceTrackPoint>.unmodifiable(points),
@@ -768,6 +1185,9 @@ class FaceDetectionService {
 
       if (out.isNotEmpty && simplified.isNotEmpty) {
         _appendInstantCut(out, simplified.first);
+        // The first point of a new shot is a cut target: flag it so the editor
+        // and FFmpeg see an instant snap instead of a pan through the gap.
+        simplified[0] = simplified.first.copyWith(isCut: true);
       }
       out.addAll(simplified);
     }
@@ -775,6 +1195,165 @@ class FaceDetectionService {
     return List<FaceTrackPoint>.unmodifiable(
       _enforceBudget(out, maxKeyframes),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cut semantics + manual keyframe editing
+  // ---------------------------------------------------------------------------
+
+  /// Default tolerance (seconds) for "the keyframe at the playhead" updates.
+  static const double manualKeyframeToleranceSec = 0.35;
+
+  /// Whether the transition `a -> b` is an instant jump cut.
+  ///
+  /// 1. an explicit `b.isCut` always wins;
+  /// 2. a **manual** keyframe with `isCut == false` is a deliberate smooth
+  ///    override (the user pressed "Smooth"), so heuristics never re-cut it;
+  /// 3. otherwise a very fast (`<= 0.05s`) or large (`>= 0.12` in X) jump is
+  ///    treated as a cut — nobody pans through an empty wall that fast.
+  static bool isEffectiveCut(FaceTrackPoint a, FaceTrackPoint b) {
+    if (b.isCut) return true;
+    if (b.isManual) return false;
+    if (b.timeSec - a.timeSec <= 0.05) return true;
+    return (b.normX - a.normX).abs() >= 0.12;
+  }
+
+  /// Expands every effective cut into an explicit **1ms step pair**:
+  /// `(t: b.timeSec - 0.001, position of a)` followed by `b`, so FFmpeg's
+  /// balanced time tree renders an exact 1ms instant snap, while `isCut == false`
+  /// keyframes stay a smooth linear pan.
+  ///
+  /// Idempotent: re-materializing an already expanded list adds nothing.
+  static List<FaceTrackPoint> materializeKeyframesForFfmpeg(
+    List<FaceTrackPoint> keyframes,
+  ) {
+    if (keyframes.length < 2) return List<FaceTrackPoint>.of(keyframes);
+
+    final out = <FaceTrackPoint>[keyframes.first];
+    for (var i = 1; i < keyframes.length; i++) {
+      final previous = out.last;
+      final point = keyframes[i];
+      if (isEffectiveCut(previous, point)) {
+        final stepTime = point.timeSec - 0.001;
+        if (stepTime > previous.timeSec) {
+          out.add(
+            FaceTrackPoint(
+              timeSec: stepTime,
+              normX: previous.normX,
+              normY: previous.normY,
+            ),
+          );
+        }
+      }
+      out.add(point);
+    }
+    return List<FaceTrackPoint>.unmodifiable(out);
+  }
+
+  /// Prepares raw AI keyframes for the interactive editor:
+  ///  - folds synthetic `t-0.001` step helpers into single logical keyframes
+  ///    carrying `isCut: true` (the user sees clean, editable keyframes);
+  ///  - guarantees every jump `>= 0.10` in X or Y is flagged `isCut: true`.
+  static List<FaceTrackPoint> normalizeKeyframesForEditing(
+    List<FaceTrackPoint> keyframes,
+  ) {
+    if (keyframes.isEmpty) return const [];
+
+    final cleaned = <FaceTrackPoint>[];
+    for (final point in keyframes) {
+      if (cleaned.isNotEmpty &&
+          point.timeSec - cleaned.last.timeSec <= 0.002) {
+        // Synthetic 1ms step helper: keep ONE logical keyframe with the new
+        // segment's position and a cut transition from the previous one.
+        cleaned[cleaned.length - 1] = FaceTrackPoint(
+          timeSec: point.timeSec,
+          normX: point.normX,
+          normY: point.normY,
+          isCut: true,
+          isManual: point.isManual,
+        );
+        continue;
+      }
+      cleaned.add(point);
+    }
+
+    final out = <FaceTrackPoint>[];
+    for (var i = 0; i < cleaned.length; i++) {
+      var point = cleaned[i];
+      if (i > 0) {
+        final previous = out.last;
+        final jump = (point.normX - previous.normX).abs() >= 0.10 ||
+            (point.normY - previous.normY).abs() >= 0.10;
+        if (jump && !point.isCut) point = point.copyWith(isCut: true);
+      }
+      out.add(point);
+    }
+    return List<FaceTrackPoint>.unmodifiable(out);
+  }
+
+  /// Adds a manual keyframe at [timeSec], or updates the nearest existing one
+  /// within [tolerance] seconds in place (position + `isManual: true`, time
+  /// unchanged). New keyframes are inserted in sorted time order with
+  /// `isCut: true` and `isManual: true`.
+  static List<FaceTrackPoint> upsertManualKeyframe(
+    List<FaceTrackPoint> keyframes, {
+    required double timeSec,
+    required double normX,
+    required double normY,
+    double tolerance = manualKeyframeToleranceSec,
+  }) {
+    var bestIndex = -1;
+    var bestDelta = double.infinity;
+    for (var i = 0; i < keyframes.length; i++) {
+      final delta = (keyframes[i].timeSec - timeSec).abs();
+      if (delta <= tolerance && delta < bestDelta) {
+        bestDelta = delta;
+        bestIndex = i;
+      }
+    }
+
+    final out = List<FaceTrackPoint>.of(keyframes);
+    if (bestIndex >= 0) {
+      out[bestIndex] = out[bestIndex].copyWith(
+        normX: normX,
+        normY: normY,
+        isManual: true,
+      );
+      return out;
+    }
+
+    final point = FaceTrackPoint(
+      timeSec: timeSec,
+      normX: normX,
+      normY: normY,
+      isCut: true,
+      isManual: true,
+    );
+    var insertAt = out.length;
+    for (var i = 0; i < out.length; i++) {
+      if (out[i].timeSec > timeSec) {
+        insertAt = i;
+        break;
+      }
+    }
+    out.insert(insertAt, point);
+    return out;
+  }
+
+  /// Deletes the keyframe at [index]. Keeps at least one keyframe so the
+  /// camera always has somewhere to be.
+  static List<FaceTrackPoint> deleteKeyframe(
+    List<FaceTrackPoint> keyframes,
+    int index,
+  ) {
+    if (index < 0 ||
+        index >= keyframes.length ||
+        keyframes.length <= 1) {
+      return List<FaceTrackPoint>.of(keyframes);
+    }
+    final out = List<FaceTrackPoint>.of(keyframes);
+    out.removeAt(index);
+    return out;
   }
 
   /// Dead-zone + EMA **without** crossing a speaker switch/scene jump.
@@ -798,6 +1377,7 @@ class FaceDetectionService {
       );
       if (out.isNotEmpty && segment.isNotEmpty) {
         _appendInstantCut(out, segment.first);
+        segment[0] = segment.first.copyWith(isCut: true);
       }
       out.addAll(segment);
     }

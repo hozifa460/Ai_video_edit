@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:flutter/material.dart';
@@ -37,6 +38,21 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   /// the locked person's path when `selectedSpeakerId` is set. Recomputed only
   /// when the analysis, motion preset or speaker selection changes.
   FaceTrackResult? _effectiveTrack;
+
+  /// AI-generated keyframes (normalized for editing) — the "Reset AI" base.
+  List<FaceTrackPoint> _aiKeyframes = const [];
+
+  /// User-editable keyframe list driving preview + render. Re-initialized
+  /// whenever [_recomputeEffectiveTrack] runs.
+  List<FaceTrackPoint> _workingKeyframes = const [];
+
+  /// When on, tapping the video places/moves the crop window instead of
+  /// locking onto a detected face.
+  bool _editMode = false;
+
+  /// Crop-box drag origin (normalized), kept across a pan gesture.
+  (double, double)? _dragOrigin;
+
   bool _analyzing = false;
   double _analysisProgress = 0;
   String _analysisStatus = '';
@@ -150,44 +166,219 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
 
   /// Resolves the path used by preview + render: the auto active-speaker
   /// trajectory, or the locked person's own trajectory when a speaker chip is
-  /// selected (`selectedSpeakerId != null`).
+  /// selected (`selectedSpeakerId != null`), then (re)initializes the manual
+  /// keyframe editor from those keyframes.
   void _recomputeEffectiveTrack() {
     final track = _track;
     if (track == null) {
       _effectiveTrack = null;
+      _aiKeyframes = const [];
+      _workingKeyframes = const [];
       return;
     }
     final id = _config.selectedSpeakerId;
-    if (id == null) {
-      _effectiveTrack = track;
-      return;
-    }
-    DetectedSpeakerProfile? profile;
-    for (final candidate in track.speakers) {
-      if (candidate.id == id) {
-        profile = candidate;
-        break;
+    FaceTrackResult resolved = track;
+    if (id != null) {
+      DetectedSpeakerProfile? profile;
+      for (final candidate in track.speakers) {
+        if (candidate.id == id) {
+          profile = candidate;
+          break;
+        }
+      }
+      if (profile != null) {
+        resolved = FaceTrackResult(
+          rawPoints: profile.rawPoints,
+          keyframes: FaceDetectionService.buildKeyframes(
+            profile.rawPoints,
+            deadZone: _config.motion.deadZone,
+            smoothness: _config.motion.smoothness,
+          ),
+          avgNormX: profile.avgNormX,
+          avgNormY: profile.avgNormY,
+          facesDetectedCount: track.facesDetectedCount,
+          speakers: track.speakers,
+          sourceWidth: track.sourceWidth,
+          sourceHeight: track.sourceHeight,
+        );
       }
     }
-    if (profile == null) {
-      _effectiveTrack = track;
-      return;
+    _effectiveTrack = resolved;
+
+    // Clean, editable keyframes: fold synthetic 1ms helpers into single
+    // cut keyframes and flag every >= 0.10 jump as an instant cut.
+    _aiKeyframes = FaceDetectionService.normalizeKeyframesForEditing(
+      resolved.keyframes,
+    );
+    _workingKeyframes = List<FaceTrackPoint>.of(_aiKeyframes);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Manual keyframe editor
+  // ---------------------------------------------------------------------------
+
+  /// Working-keyframe position at [timeSec], honoring `isCut` holds/snaps.
+  (double, double) _currentSampledPosition(double timeSec) {
+    final keyframes = _workingKeyframes;
+    if (keyframes.isEmpty) {
+      return _effectiveTrack?.sampleAt(timeSec) ?? (0.5, 0.42);
     }
-    _effectiveTrack = FaceTrackResult(
-      rawPoints: profile.rawPoints,
-      keyframes: FaceDetectionService.buildKeyframes(
-        profile.rawPoints,
-        deadZone: _config.motion.deadZone,
-        smoothness: _config.motion.smoothness,
-      ),
-      avgNormX: profile.avgNormX,
-      avgNormY: profile.avgNormY,
-      facesDetectedCount: track.facesDetectedCount,
-      speakers: track.speakers,
-      sourceWidth: track.sourceWidth,
-      sourceHeight: track.sourceHeight,
+    return FaceTrackResult.sampleKeyframes(keyframes, timeSec);
+  }
+
+  /// Index of the keyframe nearest to [timeSec] (`-1` when there is none).
+  int _nearestKfIndex(double timeSec) {
+    final keyframes = _workingKeyframes;
+    if (keyframes.isEmpty) return -1;
+    var best = 0;
+    var bestDelta = double.infinity;
+    for (var i = 0; i < keyframes.length; i++) {
+      final delta = (keyframes[i].timeSec - timeSec).abs();
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /// Insert-or-update a manual keyframe at [timeSec] (±0.35s window).
+  void _upsertManualKeyframeAt(double timeSec, double normX, double normY) {
+    setState(() {
+      _workingKeyframes = FaceDetectionService.upsertManualKeyframe(
+        _workingKeyframes,
+        timeSec: timeSec,
+        normX: normX,
+        normY: normY,
+      );
+    });
+  }
+
+  void _seekToTime(double timeSec) {
+    final controller = _controller;
+    if (controller == null || _durationSeconds <= 0) return;
+    final clamped = timeSec.clamp(0.0, _durationSeconds);
+    controller.seekTo(Duration(milliseconds: (clamped * 1000).round()));
+    setState(() {});
+  }
+
+  /// "+ Add / Set KF": keyframes the crop position at the playhead.
+  void _addOrSetKeyframeAtPlayhead() {
+    final (x, y) = _currentSampledPosition(_positionSeconds);
+    _upsertManualKeyframeAt(_positionSeconds, x, y);
+  }
+
+  /// Toggles the transition of the current keyframe. Marked `isManual` so the
+  /// automatic cut heuristics never override the user's choice.
+  void _toggleCutForCurrentKeyframe() {
+    final index = _nearestKfIndex(_positionSeconds);
+    if (index < 0) return;
+    setState(() {
+      final updated = List<FaceTrackPoint>.of(_workingKeyframes);
+      final point = updated[index];
+      updated[index] = point.copyWith(isCut: !point.isCut, isManual: true);
+      _workingKeyframes = updated;
+    });
+  }
+
+  void _deleteCurrentKeyframe() {
+    if (_workingKeyframes.length <= 1) return;
+    final index = _nearestKfIndex(_positionSeconds);
+    if (index < 0) return;
+    setState(() {
+      _workingKeyframes = FaceDetectionService.deleteKeyframe(
+        _workingKeyframes,
+        index,
+      );
+    });
+  }
+
+  void _resetKeyframes() {
+    setState(() => _workingKeyframes = List<FaceTrackPoint>.of(_aiKeyframes));
+  }
+
+  /// -1 = previous keyframe before the playhead, +1 = next one after it.
+  void _jumpKeyframe(int direction) {
+    final position = _positionSeconds;
+    double? target;
+    if (direction < 0) {
+      for (final point in _workingKeyframes) {
+        if (point.timeSec < position - 0.05) target = point.timeSec;
+      }
+    } else {
+      for (final point in _workingKeyframes) {
+        if (point.timeSec > position + 0.05) {
+          target = point.timeSec;
+          break;
+        }
+      }
+    }
+    if (target != null) _seekToTime(target);
+  }
+
+  /// Output crop aspect after `frameFill` (mirrors the FFmpeg inner box).
+  double _effectiveCropAspect() {
+    final (outW, outH) = _config.outputSize;
+    final box = FfmpegAutoReframeService.innerBoxForFill(
+      outW: outW,
+      outH: outH,
+      frameFill: _config.frameFillClamped,
+    );
+    return box.boxW / box.boxH;
+  }
+
+  /// Keeps the crop window fully inside the source frame while dragging.
+  (double, double) _clampCropCenter(
+    double normX,
+    double normY,
+    double previewW,
+    double previewH,
+  ) {
+    if (previewW <= 0 || previewH <= 0) return (normX, normY);
+    final sourceAspect = previewW / previewH;
+    final effectiveAspect = _effectiveCropAspect();
+    double cropW;
+    double cropH;
+    if (sourceAspect > effectiveAspect) {
+      cropH = 1.0;
+      cropW = effectiveAspect / sourceAspect;
+    } else {
+      cropW = 1.0;
+      cropH = sourceAspect / effectiveAspect;
+    }
+    return (
+      normX.clamp(cropW / 2, 1 - cropW / 2),
+      normY.clamp(cropH / 2, 1 - cropH / 2),
     );
   }
+
+  // --- Direct crop-box dragging ---------------------------------------------
+
+  void _onCropPanStart() {
+    final controller = _controller;
+    if (controller != null && controller.value.isPlaying) controller.pause();
+    _dragOrigin = _currentSampledPosition(_positionSeconds);
+  }
+
+  void _onCropPanUpdate(
+    double deltaXPx,
+    double deltaYPx,
+    double previewW,
+    double previewH,
+  ) {
+    if (previewW <= 0 || previewH <= 0) return;
+    final origin = _dragOrigin ?? _currentSampledPosition(_positionSeconds);
+    _dragOrigin = origin;
+    final (clampedX, clampedY) = _clampCropCenter(
+      origin.$1 + deltaXPx / previewW,
+      origin.$2 + deltaYPx / previewH,
+      previewW,
+      previewH,
+    );
+    _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
+  }
+
+  void _onCropPanEnd() => _dragOrigin = null;
 
   void _selectSpeaker(int? speakerId) {
     setState(() {
@@ -345,11 +536,30 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       ),
     );
 
+    // Working keyframes are the source of truth after manual edits; expand
+    // effective cuts into 1ms steps (idempotent) so FFmpeg snaps exactly.
+    final base = _effectiveTrack;
+    final working = _workingKeyframes;
+    final renderTrack = working.isEmpty
+        ? base
+        : FaceTrackResult(
+            rawPoints: base?.rawPoints ?? working,
+            keyframes: FaceDetectionService.materializeKeyframesForFfmpeg(
+              working,
+            ),
+            avgNormX: base?.avgNormX ?? 0.5,
+            avgNormY: base?.avgNormY ?? 0.42,
+            facesDetectedCount: base?.facesDetectedCount ?? 0,
+            speakers: base?.speakers ?? const [],
+            sourceWidth: base?.sourceWidth ?? 0,
+            sourceHeight: base?.sourceHeight ?? 0,
+          );
+
     final result = await _reframeService.reframe(
       videoPath: widget.videoPath,
       outputPath: outputPath,
       config: _config,
-      track: _effectiveTrack,
+      track: renderTrack,
       durationMs: _duration.inMilliseconds,
       onProgress: (value, message) {
         progress.value = value;
@@ -416,6 +626,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           children: [
             _buildPreview(),
             const SizedBox(height: 12),
+            _buildKeyframeEditor(),
             if (_analyzing) _buildAnalysisBanner(),
             if (_track != null) _buildTrackSummary(),
             if (_track != null && _track!.speakers.isNotEmpty) ...[
@@ -477,7 +688,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         ? size.width / size.height
         : 16 / 9;
     final effective = _effectiveTrack;
-    final (normX, normY) = effective?.sampleAt(_positionSeconds) ?? (0.5, 0.42);
+    final (normX, normY) = _currentSampledPosition(_positionSeconds);
     final faces = _faceMarkersAt(_positionSeconds);
 
     return Column(
@@ -492,12 +703,33 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 final previewH = constraints.maxHeight;
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
+                  // Drag the purple crop box directly on the video.
+                  onPanStart: (_) => _onCropPanStart(),
+                  onPanUpdate: (details) => _onCropPanUpdate(
+                    details.delta.dx,
+                    details.delta.dy,
+                    previewW,
+                    previewH,
+                  ),
+                  onPanEnd: (_) => _onCropPanEnd(),
                   onTapUp: (details) {
                     if (previewW <= 0 || previewH <= 0) return;
-                    _onPreviewTap(
-                      (details.localPosition.dx / previewW).clamp(0.0, 1.0),
-                      (details.localPosition.dy / previewH).clamp(0.0, 1.0),
-                    );
+                    final rawX =
+                        (details.localPosition.dx / previewW).clamp(0.0, 1.0);
+                    final rawY =
+                        (details.localPosition.dy / previewH).clamp(0.0, 1.0);
+                    if (_editMode) {
+                      // Edit mode: tap places the crop center right there.
+                      final (cx, cy) = _clampCropCenter(
+                        rawX,
+                        rawY,
+                        previewW,
+                        previewH,
+                      );
+                      _upsertManualKeyframeAt(_positionSeconds, cx, cy);
+                      return;
+                    }
+                    _onPreviewTap(rawX, rawY);
                   },
                   child: Stack(
                     fit: StackFit.expand,
@@ -516,6 +748,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                           faces: faces,
                         ),
                       ),
+                      if (_editMode)
+                        const Positioned(
+                          left: 8,
+                          top: 8,
+                          child: _EditModeBadge(),
+                        ),
                       Positioned(
                         right: 8,
                         bottom: 8,
@@ -555,6 +793,210 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           style: const TextStyle(fontSize: 12, color: AppColors.textTertiary),
         ),
       ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Interactive keyframe editor
+  // ---------------------------------------------------------------------------
+
+  Widget _buildKeyframeEditor() {
+    final keyframes = _workingKeyframes;
+    final duration = _durationSeconds > 0 ? _durationSeconds : 0.0;
+    final position = _positionSeconds.clamp(0.0, duration > 0 ? duration : 0.0);
+    final currentIdx = _nearestKfIndex(position);
+    final selected = currentIdx >= 0 ? keyframes[currentIdx] : null;
+    final hasPrev = keyframes.any((k) => k.timeSec < position - 0.05);
+    final hasNext = keyframes.any((k) => k.timeSec > position + 0.05);
+
+    return Card(
+      color: AppColors.surfaceLight,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Keyframe Editor',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                FilterChip(
+                  avatar: Icon(
+                    Icons.edit,
+                    size: 16,
+                    color: _editMode ? Colors.black : AppColors.textTertiary,
+                  ),
+                  label: const Text('Edit Keyframes'),
+                  selected: _editMode,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (value) => setState(() => _editMode = value),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Drag the crop box on the video (or tap with Edit Keyframes on) '
+              'to place keyframes.',
+              style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
+            ),
+            const SizedBox(height: 8),
+
+            // Visual keyframe timeline: AI cyan, manual gold, active magenta;
+            // filled diamond = instant cut, hollow = smooth pan.
+            SizedBox(
+              height: 46,
+              width: double.infinity,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapUp: (details) {
+                      if (duration <= 0 || keyframes.isEmpty) return;
+                      final tapped =
+                          details.localPosition.dx.clamp(0.0, width);
+                      final tappedTime = tapped / width * duration;
+                      // Snap to a marker within ~14px, else plain seek.
+                      var target = tappedTime;
+                      var bestDelta = 14.0 / width * duration;
+                      for (final kf in keyframes) {
+                        final delta = (kf.timeSec - tappedTime).abs();
+                        if (delta <= bestDelta) {
+                          bestDelta = delta;
+                          target = kf.timeSec;
+                        }
+                      }
+                      _seekToTime(target);
+                    },
+                    child: CustomPaint(
+                      size: Size(width, 46),
+                      painter: KeyframeTimelinePainter(
+                        keyframes: keyframes,
+                        duration: duration,
+                        position: position,
+                        selectedIndex: currentIdx,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '◆ AI cyan · ◆ manual gold · ◆ active magenta · '
+              'filled = cut · hollow = smooth',
+              style: TextStyle(fontSize: 10, color: AppColors.textTertiary),
+            ),
+            const SizedBox(height: 8),
+
+            // Keyframe action toolbar.
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _editorButton(
+                  icon: Icons.chevron_left,
+                  label: 'Prev KF',
+                  onPressed:
+                      hasPrev ? () => _jumpKeyframe(-1) : null,
+                ),
+                _editorButton(
+                  icon: Icons.chevron_right,
+                  label: 'Next KF',
+                  onPressed:
+                      hasNext ? () => _jumpKeyframe(1) : null,
+                ),
+                _editorButton(
+                  icon: Icons.add_location_alt,
+                  label: 'Add / Set KF',
+                  onPressed: duration > 0
+                      ? _addOrSetKeyframeAtPlayhead
+                      : null,
+                ),
+                _editorButton(
+                  icon: selected != null && !selected.isCut
+                      ? Icons.waves
+                      : Icons.flash_on,
+                  label: selected == null
+                      ? 'Cut / Smooth'
+                      : (selected.isCut ? 'Cut ⚡' : 'Smooth 〰️'),
+                  highlighted: selected?.isCut ?? false,
+                  onPressed:
+                      selected != null ? _toggleCutForCurrentKeyframe : null,
+                ),
+                _editorButton(
+                  icon: Icons.delete_outline,
+                  label: 'Delete 🗑️',
+                  onPressed: _workingKeyframes.length > 1
+                      ? _deleteCurrentKeyframe
+                      : null,
+                ),
+                _editorButton(
+                  icon: Icons.restart_alt,
+                  label: 'Reset AI ↺',
+                  onPressed: _aiKeyframes.isNotEmpty ? _resetKeyframes : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // Scrollable keyframe chips.
+            if (keyframes.isNotEmpty)
+              SizedBox(
+                height: 36,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: keyframes.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 6),
+                  itemBuilder: (context, i) {
+                    final kf = keyframes[i];
+                    final marker =
+                        '${kf.isManual ? '✋' : ''}${kf.isCut ? '⚡' : '〰️'}';
+                    return ChoiceChip(
+                      label: Text(
+                        '#${i + 1} ${_formatTime(kf.timeSec)} $marker',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      selected: i == currentIdx,
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (_) => _seekToTime(kf.timeSec),
+                    );
+                  },
+                ),
+              )
+            else
+              const Text(
+                'No keyframes yet — play the video and press '
+                '"Add / Set KF", or drag the crop box.',
+                style:
+                    TextStyle(fontSize: 11, color: AppColors.textTertiary),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _editorButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool highlighted = false,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      style: OutlinedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        foregroundColor:
+            highlighted ? const Color(0xFFE040FB) : null,
+      ),
     );
   }
 
@@ -965,10 +1407,16 @@ class ReframeOverlayPainter extends CustomPainter {
 
     // Black bars added by `pad=...:black`, drawn at the exact final proportion
     // inside the crop window (portrait → top/bottom, landscape → left/right).
+    // The preview must NOT hide the speaker's face with opaque bars: use a
+    // translucent letterbox band + dashed guide lines instead, so the full
+    // cropped area stays visible while dragging the box.
     final portrait = outH >= outW;
     final barFraction = (1 - (portrait ? boxH / outH : boxW / outW)) / 2;
     if (barFraction > 0.004) {
-      final barPaint = Paint()..color = Colors.black;
+      final barPaint = Paint()..color = Colors.black26;
+      final guidePaint = Paint()
+        ..color = Colors.white70
+        ..strokeWidth = 1.2;
       if (portrait) {
         final barH = cropRect.height * barFraction;
         canvas.drawRect(
@@ -984,6 +1432,18 @@ class ReframeOverlayPainter extends CustomPainter {
           ),
           barPaint,
         );
+        _drawDashedLine(
+          canvas,
+          Offset(cropRect.left, cropRect.top + barH),
+          Offset(cropRect.right, cropRect.top + barH),
+          guidePaint,
+        );
+        _drawDashedLine(
+          canvas,
+          Offset(cropRect.left, cropRect.bottom - barH),
+          Offset(cropRect.right, cropRect.bottom - barH),
+          guidePaint,
+        );
       } else {
         final barW = cropRect.width * barFraction;
         canvas.drawRect(
@@ -998,6 +1458,18 @@ class ReframeOverlayPainter extends CustomPainter {
             cropRect.height,
           ),
           barPaint,
+        );
+        _drawDashedLine(
+          canvas,
+          Offset(cropRect.left + barW, cropRect.top),
+          Offset(cropRect.left + barW, cropRect.bottom),
+          guidePaint,
+        );
+        _drawDashedLine(
+          canvas,
+          Offset(cropRect.right - barW, cropRect.top),
+          Offset(cropRect.right - barW, cropRect.bottom),
+          guidePaint,
         );
       }
     }
@@ -1083,6 +1555,30 @@ class ReframeOverlayPainter extends CustomPainter {
     }
   }
 
+  /// Dashed helper line for the letterbox guide in the preview.
+  static void _drawDashedLine(
+    Canvas canvas,
+    Offset from,
+    Offset to,
+    Paint paint, {
+    double dash = 8,
+    double gap = 6,
+  }) {
+    final total = (to - from).distance;
+    if (total <= 0) return;
+    final unit = (to - from) / total;
+    var traveled = 0.0;
+    while (traveled < total) {
+      final dashEnd = min(traveled + dash, total);
+      canvas.drawLine(
+        from + unit * traveled,
+        from + unit * dashEnd,
+        paint,
+      );
+      traveled = dashEnd + gap;
+    }
+  }
+
   @override
   bool shouldRepaint(covariant ReframeOverlayPainter oldDelegate) {
     return oldDelegate.normX != normX ||
@@ -1094,5 +1590,150 @@ class ReframeOverlayPainter extends CustomPainter {
         oldDelegate.style != style ||
         oldDelegate.speakerLocked != speakerLocked ||
         oldDelegate.faces.length != faces.length;
+  }
+}
+
+/// Small hint badge shown on the preview while "Edit Keyframes" mode is on.
+class _EditModeBadge extends StatelessWidget {
+  const _EditModeBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xCCCDDC39),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.edit, size: 14, color: Colors.black),
+          SizedBox(width: 4),
+          Text(
+            'Edit mode: tap/drag to move crop',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Colors.black,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Timeline strip painting diamond keyframe markers.
+///
+/// * AI keyframes: cyan `#00E5FF`
+/// * manual/edited keyframes: amber `#FFD54F`
+/// * nearest/active keyframe: magenta `#E040FB` (drawn larger)
+/// * `isCut` keyframes are **filled** diamonds, smooth ones are **hollow**
+class KeyframeTimelinePainter extends CustomPainter {
+  final List<FaceTrackPoint> keyframes;
+  final double duration;
+  final double position;
+  final int selectedIndex;
+
+  const KeyframeTimelinePainter({
+    required this.keyframes,
+    required this.duration,
+    required this.position,
+    required this.selectedIndex,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+    final midY = size.height / 2;
+
+    canvas.drawLine(
+      Offset(0, midY),
+      Offset(size.width, midY),
+      Paint()
+        ..color = Colors.white24
+        ..strokeWidth = 2,
+    );
+
+    // Playhead marker.
+    if (duration > 0) {
+      final playX = (position / duration).clamp(0.0, 1.0) * size.width;
+      canvas.drawLine(
+        Offset(playX, 3),
+        Offset(playX, size.height - 3),
+        Paint()
+          ..color = Colors.white
+          ..strokeWidth = 1.4,
+      );
+    }
+
+    if (duration <= 0) return;
+    for (var i = 0; i < keyframes.length; i++) {
+      final kf = keyframes[i];
+      final x = (kf.timeSec / duration).clamp(0.0, 1.0) * size.width;
+      final selected = i == selectedIndex;
+      final color = selected
+          ? const Color(0xFFE040FB)
+          : (kf.isManual
+              ? const Color(0xFFFFD54F)
+              : const Color(0xFF00E5FF));
+      final radius = selected ? 8.0 : 5.5;
+      final diamond = Path()
+        ..moveTo(x, midY - radius)
+        ..lineTo(x + radius, midY)
+        ..lineTo(x, midY + radius)
+        ..lineTo(x - radius, midY)
+        ..close();
+
+      if (kf.isCut) {
+        // Instant cut: filled diamond.
+        canvas.drawPath(diamond, Paint()..color = color);
+        if (selected) {
+          canvas.drawPath(
+            diamond,
+            Paint()
+              ..color = Colors.white
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.4,
+          );
+        }
+      } else {
+        // Smooth pan: hollow diamond.
+        canvas.drawPath(
+          diamond,
+          Paint()
+            ..color = color
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant KeyframeTimelinePainter oldDelegate) {
+    return oldDelegate.position != position ||
+        oldDelegate.duration != duration ||
+        oldDelegate.selectedIndex != selectedIndex ||
+        oldDelegate.keyframes.length != keyframes.length ||
+        !_sameKeyframes(oldDelegate.keyframes, keyframes);
+  }
+
+  static bool _sameKeyframes(
+    List<FaceTrackPoint> a,
+    List<FaceTrackPoint> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].timeSec != b[i].timeSec ||
+          a[i].normX != b[i].normX ||
+          a[i].normY != b[i].normY ||
+          a[i].isCut != b[i].isCut ||
+          a[i].isManual != b[i].isManual) {
+        return false;
+      }
+    }
+    return true;
   }
 }

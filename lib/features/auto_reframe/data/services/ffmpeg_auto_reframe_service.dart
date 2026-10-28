@@ -43,20 +43,31 @@ class FfmpegAutoReframeService {
   /// 64-keyframe trajectory nests only `log2(64) ≈ 6` levels deep instead of
   /// 64: FFmpeg's expression parser never overflows and speaker cuts survive
   /// intact.
+  ///
+  /// Cut handling: explicit `isCut` keyframes are expanded into 1ms step pairs
+  /// first (see [FaceDetectionService.materializeKeyframesForFfmpeg]), so this
+  /// renderer always receives an already-linearized segment list — a cut then
+  /// interpolates across exactly 1ms (an instant snap) while smooth keyframes
+  /// pan linearly.
   static String normExpression(
     List<FaceTrackPoint> keyframes, {
     required bool axisX,
   }) {
     double valueOf(FaceTrackPoint p) => axisX ? p.normX : p.normY;
 
-    if (keyframes.isEmpty) return axisX ? '0.5000' : '0.4200';
-    if (keyframes.length == 1) {
-      return valueOf(keyframes.first).toStringAsFixed(4);
+    // Honor explicit cut flags even for callers that skipped materialization.
+    final linearized = keyframes.any((k) => k.isCut)
+        ? FaceDetectionService.materializeKeyframesForFfmpeg(keyframes)
+        : keyframes;
+
+    if (linearized.isEmpty) return axisX ? '0.5000' : '0.4200';
+    if (linearized.length == 1) {
+      return valueOf(linearized.first).toStringAsFixed(4);
     }
     return _buildBalancedTimeTree(
-      keyframes,
+      linearized,
       start: 0,
-      end: keyframes.length - 1,
+      end: linearized.length - 1,
       axisX: axisX,
     );
   }
@@ -131,6 +142,10 @@ class FfmpegAutoReframeService {
   /// With [frameFill] < 0.99 the source is cropped to the **wider effective
   /// aspect** of the inner box, scaled into that box, then centered on the
   /// black canvas with `pad=...:black`.
+  ///
+  /// [keyframes] are passed through
+  /// [FaceDetectionService.materializeKeyframesForFfmpeg] so `isCut` keyframes
+  /// become exact 1ms snaps (idempotent for pre-expanded lists).
   static String buildCropFilter({
     required int outW,
     required int outH,
@@ -151,8 +166,11 @@ class FfmpegAutoReframeService {
     final cropW = cropWidthExpr(targetAspect);
     final cropH = cropHeightExpr(targetAspect);
 
-    final normX = normExpression(keyframes, axisX: true);
-    final normY = normExpression(keyframes, axisX: false);
+    final linearized = FaceDetectionService.materializeKeyframesForFfmpeg(
+      keyframes,
+    );
+    final normX = normExpression(linearized, axisX: true);
+    final normY = normExpression(linearized, axisX: false);
 
     final x = faceTracking
         ? 'max(0\\,min(iw-out_w\\,iw*($normX)-out_w/2))'
@@ -196,7 +214,7 @@ class FfmpegAutoReframeService {
     }
     final keyframes =
         config.style == AutoReframeStyle.smartFaceCrop && track != null
-        ? track.keyframes
+        ? FaceDetectionService.materializeKeyframesForFfmpeg(track.keyframes)
         : const <FaceTrackPoint>[];
     final filter = buildCropFilter(
       outW: outW,
