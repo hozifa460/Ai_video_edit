@@ -21,6 +21,55 @@ class AutoReframeScreen extends StatefulWidget {
 
   const AutoReframeScreen({super.key, required this.videoPath});
 
+  /// Pure clamp math (unit-tested): keeps the crop window fully inside the
+  /// source frame for the given effective output aspect.
+  static (double, double) clampCenterForAspect(
+    double normX,
+    double normY,
+    double previewW,
+    double previewH,
+    double effectiveAspect,
+  ) {
+    if (previewW <= 0 || previewH <= 0) return (normX, normY);
+    final sourceAspect = previewW / previewH;
+    double cropW;
+    double cropH;
+    if (sourceAspect > effectiveAspect) {
+      cropH = 1.0;
+      cropW = effectiveAspect / sourceAspect;
+    } else {
+      cropW = 1.0;
+      cropH = sourceAspect / effectiveAspect;
+    }
+    return (
+      normX.clamp(cropW / 2, 1 - cropW / 2),
+      normY.clamp(cropH / 2, 1 - cropH / 2),
+    );
+  }
+
+  /// Pure drag-step math (unit-tested): `onPanUpdate` delivers PER-FRAME
+  /// incremental pixel deltas, so each step must be applied to the CURRENT
+  /// drag position (the caller advances the origin with the returned,
+  /// clamped center). Applying deltas to the fixed `onPanStart` origin would
+  /// move the box by only one frame's delta (~2px) for the whole gesture.
+  static (double, double) dragStepCenter({
+    required (double, double) origin,
+    required double deltaXPx,
+    required double deltaYPx,
+    required double previewW,
+    required double previewH,
+    required double effectiveAspect,
+  }) {
+    if (previewW <= 0 || previewH <= 0) return origin;
+    return clampCenterForAspect(
+      origin.$1 + deltaXPx / previewW,
+      origin.$2 + deltaYPx / previewH,
+      previewW,
+      previewH,
+      effectiveAspect,
+    );
+  }
+
   @override
   State<AutoReframeScreen> createState() => _AutoReframeScreenState();
 }
@@ -50,9 +99,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   /// Pixel radius within which the magnetic timeline snaps the playhead to
   /// a keyframe marker (CapCut-style magnetic scrubbing).
   static const double magneticSnapPx = 12.0;
-
-  /// Last tap position on the video preview (used by double-tap-to-place).
-  Offset? _lastPreviewTap;
 
   /// Last keyframe the magnetic timeline snapped to during the current
   /// gesture (haptic feedback fires once per newly-snapped keyframe).
@@ -395,21 +441,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     double previewW,
     double previewH,
   ) {
-    if (previewW <= 0 || previewH <= 0) return (normX, normY);
-    final sourceAspect = previewW / previewH;
-    final effectiveAspect = _effectiveCropAspect();
-    double cropW;
-    double cropH;
-    if (sourceAspect > effectiveAspect) {
-      cropH = 1.0;
-      cropW = effectiveAspect / sourceAspect;
-    } else {
-      cropW = 1.0;
-      cropH = sourceAspect / effectiveAspect;
-    }
-    return (
-      normX.clamp(cropW / 2, 1 - cropW / 2),
-      normY.clamp(cropH / 2, 1 - cropH / 2),
+    return AutoReframeScreen.clampCenterForAspect(
+      normX,
+      normY,
+      previewW,
+      previewH,
+      _effectiveCropAspect(),
     );
   }
 
@@ -429,13 +466,16 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   ) {
     if (previewW <= 0 || previewH <= 0) return;
     final origin = _dragOrigin ?? _currentSampledPosition(_positionSeconds);
-    _dragOrigin = origin;
     final (clampedX, clampedY) = _clampCropCenter(
       origin.$1 + deltaXPx / previewW,
       origin.$2 + deltaYPx / previewH,
       previewW,
       previewH,
     );
+    // Advance the origin with the CLAMPED result so the next frame's delta
+    // accumulates from where the box actually is — without this, dragging
+    // only nudges the box by one frame's delta.
+    _dragOrigin = (clampedX, clampedY);
     _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
   }
 
@@ -448,10 +488,16 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  /// Tap-to-lock: snaps the selection to the detected person nearest the tap.
-  void _onPreviewTap(double normX, double normY) {
+  /// Radius (normalized) under which a tap on the preview selects the
+  /// nearest detected person instead of moving the crop box.
+  static const double tapLockDistance = 0.12;
+
+  /// Tap-to-lock: selects the detected person whose marker is within
+  /// [tapLockDistance] of the tap. Returns false when no marker is that
+  /// close (the caller then moves the crop box to the tapped spot).
+  bool _selectSpeakerNearTap(double normX, double normY) {
     final track = _track;
-    if (track == null || track.speakers.isEmpty) return;
+    if (track == null || track.speakers.isEmpty) return false;
 
     DetectedSpeakerProfile? nearest;
     var bestDistance = double.infinity;
@@ -459,14 +505,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       final (px, py) = _positionAt(profile.rawPoints, _positionSeconds);
       final dx = px - normX;
       final dy = py - normY;
+      // Squared distance vs squared radius (no sqrt needed).
       final distance = dx * dx + dy * dy;
       if (distance < bestDistance) {
         bestDistance = distance;
         nearest = profile;
       }
     }
-    if (nearest == null) return;
+    if (nearest == null ||
+        bestDistance >= tapLockDistance * tapLockDistance) {
+      return false;
+    }
     _selectSpeaker(nearest.id);
+    return true;
   }
 
   /// Position of a trajectory at one instant (nearest sampled point).
@@ -775,29 +826,24 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     previewH,
                   ),
                   onPanEnd: (_) => _onCropPanEnd(),
-                  // Double-tap drops the crop box right at that spot (the
-                  // tap position is captured by onTapDown below).
-                  onDoubleTap: () {
-                    final local = _lastPreviewTap;
-                    if (local == null || previewW <= 0 || previewH <= 0) {
-                      return;
-                    }
+                  // No onDoubleTap here: attaching it would make the gesture
+                  // arena delay EVERY single tap by ~300ms. A single tap is
+                  // enough — near a detected person it locks that speaker,
+                  // anywhere else it moves the crop box to the tapped spot.
+                  onTapUp: (details) {
+                    if (previewW <= 0 || previewH <= 0) return;
+                    final normX =
+                        (details.localPosition.dx / previewW).clamp(0.0, 1.0);
+                    final normY =
+                        (details.localPosition.dy / previewH).clamp(0.0, 1.0);
+                    if (_selectSpeakerNearTap(normX, normY)) return;
                     final (cx, cy) = _clampCropCenter(
-                      (local.dx / previewW).clamp(0.0, 1.0),
-                      (local.dy / previewH).clamp(0.0, 1.0),
+                      normX,
+                      normY,
                       previewW,
                       previewH,
                     );
                     _upsertManualKeyframeAt(_positionSeconds, cx, cy);
-                  },
-                  onTapDown: (details) =>
-                      _lastPreviewTap = details.localPosition,
-                  onTapUp: (details) {
-                    if (previewW <= 0 || previewH <= 0) return;
-                    _onPreviewTap(
-                      (details.localPosition.dx / previewW).clamp(0.0, 1.0),
-                      (details.localPosition.dy / previewH).clamp(0.0, 1.0),
-                    );
                   },
                   child: Stack(
                     fit: StackFit.expand,

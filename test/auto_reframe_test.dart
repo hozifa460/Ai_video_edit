@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:ai_video_editing/core/services/face_detection_service.dart';
 import 'package:ai_video_editing/features/auto_reframe/data/services/ffmpeg_auto_reframe_service.dart';
 import 'package:ai_video_editing/features/auto_reframe/domain/entities/reframe_config.dart';
+import 'package:ai_video_editing/features/auto_reframe/presentation/screens/auto_reframe_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -904,6 +905,86 @@ void main() {
       expect(graph, contains('gblur'));
       expect(graph, contains('overlay=(W-w)/2:(H-h)/2'));
       expect(graph, contains('[outv]'));
+    });
+  });
+
+  group('crop drag accumulation (preview gesture math)', () {
+    // onPanUpdate delivers PER-FRAME pixel deltas: each step must be applied
+    // to the CURRENT drag position (the screen advances _dragOrigin with the
+    // returned center), otherwise the box would only nudge by one frame's
+    // delta (~2px) for the whole gesture.
+    const previewW = 500.0;
+    const previewH = 500.0;
+    // Source 1:1 inside a 16:9 crop: X is unconstrained, Y clamps to
+    // [0.28125, 0.71875].
+    const aspect = 16 / 9;
+
+    test('per-frame deltas accumulate across a continuous drag', () {
+      // Landscape 2:1 preview with a 16:9 crop: the crop spans the full
+      // height (Y locked at 0.5) while X moves inside [4/9, 5/9].
+      const previewW = 1000.0;
+      const previewH = 500.0;
+      var position = (0.5, 0.5);
+      final xs = <double>[];
+      for (var frame = 0; frame < 3; frame++) {
+        position = AutoReframeScreen.dragStepCenter(
+          origin: position,
+          deltaXPx: 10,
+          deltaYPx: 0,
+          previewW: previewW,
+          previewH: previewH,
+          effectiveAspect: aspect,
+        );
+        xs.add(position.$1);
+      }
+      // 10px of a 1000px-wide preview = 0.01 per frame: 0.51, 0.52, 0.53.
+      expect(xs[0], closeTo(0.51, 1e-9));
+      expect(xs[1], closeTo(0.52, 1e-9));
+      expect(xs[2], closeTo(0.53, 1e-9));
+      expect(position.$2, closeTo(0.5, 1e-9));
+    });
+
+    test('leftward drags accumulate too (negative deltas)', () {
+      const previewW = 1000.0;
+      const previewH = 500.0;
+      var position = (0.5, 0.5);
+      for (var frame = 0; frame < 4; frame++) {
+        position = AutoReframeScreen.dragStepCenter(
+          origin: position,
+          deltaXPx: -10,
+          deltaYPx: 0,
+          previewW: previewW,
+          previewH: previewH,
+          effectiveAspect: aspect,
+        );
+      }
+      expect(position.$1, closeTo(0.46, 1e-9));
+    });
+
+    test('the clamped edge position keeps accumulating without overshoot',
+        () {
+      // Start near the bottom clamp (0.71875) and keep dragging down: the
+      // origin advances with the CLAMPED value, so a second over-edge step
+      // stays exactly at the edge instead of drifting further out.
+      var position = AutoReframeScreen.dragStepCenter(
+        origin: (0.5, 0.70),
+        deltaXPx: 0,
+        deltaYPx: 50, // +0.10 -> 0.80, clamped to 0.71875
+        previewW: previewW,
+        previewH: previewH,
+        effectiveAspect: aspect,
+      );
+      expect(position.$2, closeTo(0.71875, 1e-9));
+
+      position = AutoReframeScreen.dragStepCenter(
+        origin: position,
+        deltaXPx: 0,
+        deltaYPx: 50,
+        previewW: previewW,
+        previewH: previewH,
+        effectiveAspect: aspect,
+      );
+      expect(position.$2, closeTo(0.71875, 1e-9));
     });
   });
 

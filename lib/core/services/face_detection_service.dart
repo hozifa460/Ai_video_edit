@@ -416,11 +416,13 @@ class FaceDetectionService {
           present.add(track);
         }
 
-        if (faces.isEmpty) {
-          // No ML Kit face. ONLY a contiguous pitch-black seated silhouette
-          // (the anonymized guest) may create or continue a subject —
-          // furniture, glowing tables, microphones and wall decorations with
-          // their sharp edges must never be tracked.
+        if (present.isEmpty) {
+          // No VALID person face passed the size filter this frame (ML Kit
+          // may have returned only tiny background false-positives, which
+          // are skipped above). ONLY a contiguous pitch-black seated
+          // silhouette (the anonymized guest) may create or continue a
+          // subject — furniture, glowing tables, microphones and wall
+          // decorations with their sharp edges must never be tracked.
           final grid = await _analysisGrid(frames[i].path);
           SilhouetteSubject? subject;
           var cut = false;
