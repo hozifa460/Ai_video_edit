@@ -579,3 +579,15 @@ Android يستخدم Java/Kotlin target 17، SDK versions موروثة من Flut
 - Checks run: flutter analyze --no-pub = No issues found; flutter test --no-pub = 406 passed.
 - Limitations: host-side only - no device run, no real media/ML Kit/FFmpeg; silhouette thin-stripe stripping and face-box masking verified on synthetic grids only; mouth-region delta and passersby penalty need on-device validation.
 - Status: Implemented - awaiting review.
+
+### 2026-10-28 (6) - OpenCode - Scene-cut-aware analysis, expanded exclusion rects, ceiling-pillar stripping, _enforceBudget cut preservation
+
+- Scope: lib/core/services/face_detection_service.dart, test/auto_reframe_test.dart. Four real-world bugs found frame-by-frame against the multi-camera studio video.
+- Bug 1 (fake lip delta across scene cuts): _analysisGrid + isSceneChange now run BEFORE the face loop; cut clears currentSpeaker = null immediately; _associateFace gains allowExisting (passed !cut) and returns null on a cut so a new camera shot never hijacks a previous track; _associateSubject skips non-silhouette tracks. _updateLipActivity's hasPrev is now track.hits > 0 && !cut, and on a cut lastOpen/lastWidth/lastSmile are not diffed (anchor reset), so computeMouthRegionDelta never diffs two different scenes.
+- Bug 2 (beard/mic/table false silhouettes): faceBoxes now use an expanded person+desk exclusion rect (x ± 1.45*fw, y0 - 0.45*fh, y1 + 3.20*fh) masking hat/hair/beard/mic/suit/torso/table. Solo close-ups (maxFaceArea >= 0.035) skip detectSilhouetteOrMotionSubject entirely.
+- Bug 3 (ceiling pillar pulling normX to 0.58): silhouetteRegion widened to 0.02..0.98; top-down ceiling-pillar removal strips vertical pillars (3-6 cells) seeded at gy 0..3 that connect to horizontal mic arms; normX computed from the upper-head/neck band (top..top+0.30h) weighted by each column's thickness squared, locking onto the thickest vertical head+torso column.
+- Bug 4 (masked speaker rejected in wide/medium shots): silhouetteMaxLuma 18->24, silhouetteNeighborhoodLuma 22->28, silhouetteMinClusterFraction 0.028->0.014, silhouetteMinBottomFraction 0.65->0.52, silhouetteMaxTopFraction 0.55->0.65, silhouetteMinHeightFraction 0.22->0.15, silhouetteMinWidthFraction 0.10->0.055. _enforceBudget now preserves cut keyframes (points[i].isCut || dt <= 0.0011).
+- Tests (auto_reframe_test.dart now 50 tests; full suite 409): added ceiling-pillar stripping test (normX > 0.72), wide 3-person desk silhouette test (~3.5% / 64 cells / luma 21 detected), expanded excludeRects test (dark jacket/table masked -> null). All prior tests still pass.
+- Checks run: flutter analyze --no-pub = No issues found; flutter test --no-pub = 409 passed.
+- Limitations: host-side only - no device run, no real media/ML Kit/FFmpeg; new silhouette constants and ceiling-pillar stripping verified only on synthetic grids; expanded exclusion rect and passersby penalty need on-device validation.
+- Status: Implemented - awaiting review.

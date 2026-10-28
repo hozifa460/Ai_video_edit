@@ -843,8 +843,138 @@ void main() {
       );
       expect(delta, greaterThan(0.0));
     });
-  });
 
+    test('ceiling-connected wall pillar is stripped and normX stays on the '
+        'silhouette head', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Seated silhouette on the right.
+      for (var gy = 8; gy <= 36; gy++) {
+        for (var gx = 55; gx <= 70; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+      // Ceiling-connected vertical pillar (gy=0..24, gx=34..37) plus a
+      // horizontal mic arm bridging to the silhouette (gy=20..24, gx=34..55).
+      for (var gy = 0; gy <= 24; gy++) {
+        for (var gx = 34; gx <= 37; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+      for (var gy = 20; gy <= 24; gy++) {
+        for (var gx = 34; gx <= 55; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+
+      expect(subject, isNotNull);
+      // normX stays on the silhouette's head, NOT pulled to 0.58 by the
+      // ceiling pillar.
+      expect(subject!.normX, greaterThan(0.72));
+    });
+
+    test('a wide 3-person shot silhouette behind a desk is detected', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Seated speaker behind a studio desk: gx 65..72, gy 20..27 (64 cells),
+      // bottom 27/45=0.60, height 8/45=0.178, luma 21.
+      for (var gy = 20; gy <= 27; gy++) {
+        for (var gx = 65; gx <= 72; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 21;
+          rgba[o + 1] = 21;
+          rgba[o + 2] = 21;
+        }
+      }
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+
+      expect(subject, isNotNull);
+    });
+
+    test('expanded excludeRects mask out a dark jacket/table below a face',
+        () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Dark jacket/table directly below a visible speaker's face: without
+      // the expanded rect this would be detected as a silhouette.
+      for (var gy = 20; gy <= 40; gy++) {
+        for (var gx = 30; gx <= 60; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+
+      final exclude = <({double x0, double y0, double x1, double y1})>[
+        // Face box roughly centered above the jacket, expanded per Bug 2.
+        (
+          x0: (0.5 - 0.2 * 1.45).clamp(0.0, 1.0),
+          y0: (0.25 - 0.3 * 0.45).clamp(0.0, 1.0),
+          x1: (0.5 + 0.2 * 1.45).clamp(0.0, 1.0),
+          y1: (0.55 + 0.3 * 3.20).clamp(0.0, 1.0),
+        ),
+      ];
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+        excludeRects: exclude,
+      );
+
+      // The jacket/table region is masked out, so no silhouette is found.
+      expect(subject, isNull);
+    });
+
+  });
   group('FFmpeg crop expressions', () {
     const keyframes = [
       FaceTrackPoint(timeSec: 0, normX: 0.3, normY: 0.4),

@@ -392,8 +392,24 @@ class FaceDetectionService {
 
         final grid = await _analysisGrid(frames[i].path);
 
+        var cut = false;
+        if (grid != null) {
+          cut = isSceneChange(
+            prevGridBytes,
+            grid,
+            silhouetteGridWidth,
+            silhouetteGridHeight,
+          );
+          if (cut) {
+            // Release any speaker lock with 0ms delay so the camera snaps on
+            // the exact frame of the cut.
+            currentSpeaker = null;
+          }
+        }
+
         final present = <_SpeakerTrack>[];
         final faceBoxes = <({double x0, double y0, double x1, double y1})>[];
+        var maxFaceArea = 0.0;
         for (final face in faces) {
           final box = face.boundingBox;
           if (box.height < minFaceHeight || box.width < minFaceWidth) {
@@ -408,7 +424,20 @@ class FaceDetectionService {
           final cx = ((nx0 + nx1) / 2).clamp(0.0, 1.0);
           final cy = ((ny0 + ny1) / 2).clamp(0.0, 1.0);
 
-          faceBoxes.add((x0: nx0, y0: ny0, x1: nx1, y1: ny1));
+          final fw = nx1 - nx0;
+          final fh = ny1 - ny0;
+          final fcx = (nx0 + nx1) / 2;
+          final area = fw * fh;
+          if (area > maxFaceArea) maxFaceArea = area;
+          // Expanded person+desk exclusion rect: masks out hat/hair/beard/mic/
+          // dark suit/torso AND the studio table directly in front of the
+          // visible speaker, so none of it is mistaken for a silhouette.
+          faceBoxes.add((
+            x0: (fcx - fw * 1.45).clamp(0.0, 1.0),
+            y0: (ny0 - fh * 0.45).clamp(0.0, 1.0),
+            x1: (fcx + fw * 1.45).clamp(0.0, 1.0),
+            y1: (ny1 + fh * 3.20).clamp(0.0, 1.0),
+          ));
 
           final track = _associateFace(
             tracks,
@@ -419,6 +448,7 @@ class FaceDetectionService {
             ny1: ny1,
             cx: cx,
             cy: cy,
+            allowExisting: !cut,
           );
           if (track == null) {
             final created = _SpeakerTrack(tracks.length);
@@ -483,7 +513,6 @@ class FaceDetectionService {
           present.add(track);
         }
 
-        var cut = false;
         SilhouetteSubject? subject;
         if (grid != null) {
           cut = isSceneChange(prevGridBytes, grid, silhouetteGridWidth, silhouetteGridHeight);
@@ -492,13 +521,17 @@ class FaceDetectionService {
             // the exact frame of the cut.
             currentSpeaker = null;
           }
-          subject = detectSilhouetteOrMotionSubject(
-            grid,
-            silhouetteGridWidth,
-            silhouetteGridHeight,
-            prevGridBytes,
-            excludeRects: faceBoxes,
-          );
+          if (maxFaceArea < 0.035) {
+            subject = detectSilhouetteOrMotionSubject(
+              grid,
+              silhouetteGridWidth,
+              silhouetteGridHeight,
+              prevGridBytes,
+              excludeRects: faceBoxes,
+            );
+          } else {
+            subject = null;
+          }
         }
 
         if (subject != null) {
@@ -726,9 +759,11 @@ class FaceDetectionService {
   static const double silhouetteSceneChangeThreshold = 16.0;
 
   /// Normalized search region for the anonymized silhouette (keeps out
-  /// letterbox bars, lower-third graphics and playback chrome).
-  static const double silhouetteRegionX0 = 0.06;
-  static const double silhouetteRegionX1 = 0.94;
+  /// letterbox bars, lower-third graphics and playback chrome). Widened so
+  /// speakers near the left/right edges of wide or close shots are not
+  /// clipped.
+  static const double silhouetteRegionX0 = 0.02;
+  static const double silhouetteRegionX1 = 0.98;
   static const double silhouetteRegionY0 = 0.12;
   static const double silhouetteRegionY1 = 0.92;
 
@@ -738,22 +773,22 @@ class FaceDetectionService {
   /// motion are deliberately NOT person signals — studio furniture, glowing
   /// tables, microphones and wall decorations all have sharp edges, and
   /// locking onto them was a real-world false positive.
-  static const int silhouetteMaxLuma = 18;
-  static const int silhouetteNeighborhoodLuma = 22;
+  static const int silhouetteMaxLuma = 24;
+  static const int silhouetteNeighborhoodLuma = 28;
   static const int silhouetteMaxChannelSpread = 14;
 
   /// The studio background must be clearly brighter than the black mask.
   static const double silhouetteMinBackgroundLuma = 38;
 
-  /// Human-torso credibility guards: the mask must be seat-sized (2.8%..48% of
+  /// Human-torso credibility guards: the mask must be seat-sized (1.4%..48% of
   /// the grid), anchored low like a seated person and tall/wide enough to be
   /// a torso — anything smaller or higher is a prop or decoration.
-  static const double silhouetteMinClusterFraction = 0.028;
+  static const double silhouetteMinClusterFraction = 0.014;
   static const double silhouetteMaxClusterFraction = 0.48;
-  static const double silhouetteMinBottomFraction = 0.65;
-  static const double silhouetteMaxTopFraction = 0.55;
-  static const double silhouetteMinHeightFraction = 0.22;
-  static const double silhouetteMinWidthFraction = 0.10;
+  static const double silhouetteMinBottomFraction = 0.52;
+  static const double silhouetteMaxTopFraction = 0.65;
+  static const double silhouetteMinHeightFraction = 0.15;
+  static const double silhouetteMinWidthFraction = 0.055;
 
   /// With no credible subject at all (scene cut or empty wall for this long),
   /// the camera resets to the frame center instead of holding the previous
@@ -923,6 +958,82 @@ class FaceDetectionService {
       }
     }
 
+    // Top-down ceiling-pillar removal: a seated person's head never touches
+    // the top ceiling border (gy = 0..3). Vertical black wall pillars (3-6
+    // cells wide) that start at the ceiling and connect to a horizontal
+    // microphone arm pull normX toward the empty wall — strip them.
+    final pillarPrev = List<bool>.filled(width, false);
+    final ceilRows = min(3, height - 1);
+    for (var gx = 0; gx < width; gx++) {
+      var darkCount = 0;
+      for (var gy = 0; gy <= ceilRows; gy++) {
+        final i = gy * width + gx;
+        final l = luma[i];
+        final o = i * 4;
+        final hi = max(rgbaBytes[o], max(rgbaBytes[o + 1], rgbaBytes[o + 2]));
+        final lo = min(rgbaBytes[o], min(rgbaBytes[o + 1], rgbaBytes[o + 2]));
+        if (l <= silhouetteNeighborhoodLuma &&
+            hi - lo <= silhouetteMaxChannelSpread + 2) {
+          darkCount++;
+        }
+      }
+      if (darkCount >= 2) {
+        for (var k = gx - 1; k <= gx + 1; k++) {
+          if (k >= 0 && k < width) pillarPrev[k] = true;
+        }
+      }
+    }
+    final ceilLimit = min(y1, (height * 0.72).floor());
+    for (var gy = y0; gy <= ceilLimit; gy++) {
+      final pillarCurr = List<bool>.filled(width, false);
+      var gx = x0;
+      while (gx <= x1) {
+        if (mask[gy * width + gx] != 1) {
+          gx++;
+          continue;
+        }
+        final r0 = gx;
+        while (gx <= x1 && mask[gy * width + gx] == 1) {
+          gx++;
+        }
+        final r1 = gx - 1;
+        final runWidth = r1 - r0 + 1;
+        var touchesPillar = false;
+        for (var k = max(0, r0 - 1); k <= min(width - 1, r1 + 1); k++) {
+          if (pillarPrev[k]) {
+            touchesPillar = true;
+            break;
+          }
+        }
+        if (runWidth <= 7 && touchesPillar) {
+          for (var k = r0; k <= r1; k++) {
+            mask[gy * width + k] = 0;
+            pillarCurr[k] = true;
+          }
+        }
+        // Carry pillarPrev forward for any column that was a pillar and is
+        // still near-black.
+        for (var k = r0; k <= r1; k++) {
+          if (pillarPrev[k] &&
+              luma[gy * width + k] <= silhouetteNeighborhoodLuma) {
+            pillarCurr[k] = true;
+          }
+        }
+      }
+      // Carry forward pillars that remain near-black even outside runs.
+      for (var k = 0; k < width; k++) {
+        if (pillarPrev[k] &&
+            luma[gy * width + k] <= silhouetteNeighborhoodLuma &&
+            mask[gy * width + k] == 0) {
+          // keep pillar alive downward only if the cell is near-black
+          pillarCurr[k] = true;
+        }
+      }
+      for (var k = 0; k < width; k++) {
+        pillarPrev[k] = pillarCurr[k];
+      }
+    }
+
     // Strip thin vertical structures (wall moldings, mic boom arms, 1-2 cell
     // wide stripes) BEFORE clustering: clear any mask cell whose horizontal
     // contiguous run on its row is shorter than 3 cells. A human head/torso
@@ -976,6 +1087,7 @@ class FaceDetectionService {
     var bestRight = 0;
     var bestUpperSumX = 0.0;
     var bestUpperCells = 1;
+    var bestUpperWeightTotal = 1.0;
     final stack = <int>[];
 
     for (var gy = y0; gy <= y1; gy++) {
@@ -1024,31 +1136,50 @@ class FaceDetectionService {
           bestLeft = left;
           bestRight = right;
           // Horizontal centroid of the upper-head / neck band (top .. top +
-          // 0.38*height): centers the crop on the masked speaker's head rather
-          // than the lower chair/armrest.
+          // 0.30*height): weight each cell by the square of its column's
+          // vertical thickness so horizontal microphone arms protruding to
+          // the side (thin columns) are ignored and normX locks onto the
+          // thickest vertical head+torso column.
           final clusterHeight = bottom - top + 1;
-          final bandHeight = max(1, (clusterHeight * 0.38).round());
+          final bandHeight = max(1, (clusterHeight * 0.30).round());
           final bandBottom = top + bandHeight;
-          var bandSumX = 0.0;
+          // Column thickness of the whole cluster.
+          final colCount = List<int>.filled(width, 0);
+          for (final index in members) {
+            colCount[index % width]++;
+          }
+          var weightedSumX = 0.0;
+          var weightTotal = 0.0;
           var bandCells = 0;
-          var allSumX = 0.0;
-          var allCells = 0;
           for (final index in members) {
             final cy = index ~/ width;
-            allSumX += index % width;
-            allCells++;
             if (cy >= top && cy < bandBottom) {
-              bandSumX += index % width;
+              final cx = index % width;
+              final w = (colCount[cx] * colCount[cx]).toDouble();
+              weightedSumX += cx * w;
+              weightTotal += w;
               bandCells++;
             }
           }
-          if (bandCells == 0) {
-            bestUpperSumX = allSumX;
-            bestUpperCells = max(allCells, 1);
+          if (bandCells == 0 || weightTotal == 0) {
+            // Fallback: unweighted centroid of the band.
+            var s = 0.0;
+            var n = 0;
+            for (final index in members) {
+              final cy = index ~/ width;
+              if (cy >= top && cy < bandBottom) {
+                s += index % width;
+                n++;
+              }
+            }
+            bestUpperSumX = n == 0 ? 0.0 : s;
+            bestUpperCells = max(n, 1);
           } else {
-            bestUpperSumX = bandSumX;
+            bestUpperSumX = weightedSumX;
+            bestUpperWeightTotal = weightTotal;
             bestUpperCells = bandCells;
           }
+          // Add field bestUpperWeightTotal.
         }
       }
     }
@@ -1066,7 +1197,9 @@ class FaceDetectionService {
       return null;
     }
 
-    final normX = (bestUpperSumX / bestUpperCells + 0.5) / width;
+    final normX = bestUpperWeightTotal > 0
+        ? (bestUpperSumX / bestUpperWeightTotal + 0.5) / width
+        : (bestUpperSumX / bestUpperCells + 0.5) / width;
     // Bias Y to the head / upper-torso of the cluster.
     final normY = (bestTop + clusterHeight * 0.26) / height;
     return (
@@ -1124,6 +1257,7 @@ class FaceDetectionService {
     _SpeakerTrack? nearest;
     var bestDistance = associationDistance;
     for (final track in tracks.values) {
+      if (!track.isSilhouette) continue; // silhouette must never hijack a real face track
       if (nowSec - track.lastSeenSec > 2.5) continue;
       final dx = track.normX - normX;
       final dy = track.normY - normY;
@@ -1161,19 +1295,20 @@ class FaceDetectionService {
     var delta = 0.0;
     if (open != null) {
       final previous = track.lastOpen;
-      if (previous != null) delta += (open - previous).abs() * 4.5;
+      if (hasPrev && previous != null) delta += (open - previous).abs() * 4.5;
       track.lastOpen = open;
+      if (!hasPrev) track.lastOpen = open; // reset anchor, no diff
     }
     if (width != null) {
       final previous = track.lastWidth;
-      if (previous != null) delta += (width - previous).abs() * 2.5;
+      if (hasPrev && previous != null) delta += (width - previous).abs() * 2.5;
       track.lastWidth = width;
     }
     // Classification articulation: speaking moves mouth corners continuously.
     final smile = face.smilingProbability;
     if (smile != null) {
       final prevSmile = track.lastSmile;
-      if (prevSmile != null) delta += (smile - prevSmile).abs() * 1.8;
+      if (hasPrev && prevSmile != null) delta += (smile - prevSmile).abs() * 1.8;
       track.lastSmile = smile;
     }
     // Direct pixel mouth-region luma delta (works on ALL faces, not just the
@@ -1317,10 +1452,14 @@ class FaceDetectionService {
     required double ny1,
     required double cx,
     required double cy,
+    required bool allowExisting,
   }) {
+    if (!allowExisting) return null;
+
     _SpeakerTrack? best;
     var bestIou = minFaceOverlap;
     for (final track in tracks.values) {
+      if (track.isSilhouette) continue; // never hijack a silhouette track with a face
       if (nowSec - track.lastSeenSec > 2.5) continue;
       final iou = _boxOverlap(track, nx0, ny0, nx1, ny1);
       if (iou > bestIou) {
@@ -1333,6 +1472,7 @@ class FaceDetectionService {
     _SpeakerTrack? nearest;
     var bestDistance = associationDistance;
     for (final track in tracks.values) {
+      if (track.isSilhouette) continue;
       if (nowSec - track.lastSeenSec > 2.5) continue;
       final dx = track.normX - cx;
       final dy = track.normY - cy;
@@ -1965,7 +2105,8 @@ class FaceDetectionService {
 
     final kept = <int>{0, points.length - 1};
     for (var i = 1; i < points.length; i++) {
-      if (points[i].timeSec - points[i - 1].timeSec <= 0.0011) {
+      if (points[i].isCut ||
+          points[i].timeSec - points[i - 1].timeSec <= 0.0011) {
         kept
           ..add(i - 1)
           ..add(i);
