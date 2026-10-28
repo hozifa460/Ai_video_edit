@@ -27,28 +27,71 @@ void main() {
       }
     });
 
-    test('a real move beyond the dead-zone is followed smoothly', () {
+    test('a gradual pan inside one shot is followed smoothly', () {
       final raw = <FaceTrackPoint>[
-        for (var i = 0; i < 10; i++)
-          FaceTrackPoint(timeSec: i * 0.5, normX: 0.5, normY: 0.42),
-        for (var i = 10; i < 30; i++)
-          FaceTrackPoint(timeSec: i * 0.5, normX: 0.8, normY: 0.6),
+        for (var i = 0; i < 40; i++)
+          FaceTrackPoint(timeSec: i * 0.5, normX: 0.5 + 0.008 * i, normY: 0.42),
       ];
 
       final smoothed = FaceDetectionService.stabilizeTrack(raw);
 
-      expect(smoothed.last.normX, closeTo(0.8, 0.02));
-      expect(smoothed.last.normY, closeTo(0.6, 0.02));
-      // The pan is gradual, never a single-frame jump.
+      // The camera ends up close to the final position (dead-zone + EMA leave
+      // a small trailing lag, but never a stuck camera at the start).
+      expect(smoothed.last.normX, greaterThan(0.74));
+      expect(smoothed.last.normX, lessThan(0.83));
+      // Sub-threshold steps (never a speaker switch) stay a smooth pan.
       for (var i = 1; i < smoothed.length; i++) {
         expect(
           (smoothed[i].normX - smoothed[i - 1].normX).abs(),
-          lessThan(0.15),
+          lessThan(FaceDetectionService.speakerJumpThreshold),
         );
       }
     });
 
-    test('keyframe simplification never exceeds 18 points on long videos', () {
+    test('a speaker switch is an instant cut, never a crawl through the wall',
+        () {
+      final raw = <FaceTrackPoint>[
+        for (var i = 0; i < 10; i++)
+          FaceTrackPoint(timeSec: i * 0.5, normX: 0.2, normY: 0.5),
+        for (var i = 10; i < 20; i++)
+          FaceTrackPoint(timeSec: i * 0.5, normX: 0.8, normY: 0.5),
+      ];
+
+      final keyframes = FaceDetectionService.buildKeyframes(raw);
+
+      // The transition happens within a single millisecond — no frames are
+      // spent drifting across the empty space between the two faces.
+      var instantCutFound = false;
+      for (var i = 1; i < keyframes.length; i++) {
+        final dt = keyframes[i].timeSec - keyframes[i - 1].timeSec;
+        final dx = (keyframes[i].normX - keyframes[i - 1].normX).abs();
+        if (dx >= 0.55 && dt <= 0.0011) instantCutFound = true;
+        // No emitted sample may ever sit between the two speakers.
+        expect(
+          keyframes[i].normX < 0.3 || keyframes[i].normX > 0.7,
+          isTrue,
+          reason: 'camera must never rest between speakers (got '
+              '${keyframes[i].normX})',
+        );
+      }
+      expect(instantCutFound, isTrue);
+
+      // The FFmpeg expression snaps too: evaluating the built expression at
+      // mid-clip times returns the active speaker, not the wall at 0.5.
+      final expr = FfmpegAutoReframeService.normExpression(
+        keyframes,
+        axisX: true,
+      );
+      expect(_evaluateExpr(expr, 2.0), closeTo(0.2, 1e-6));
+      expect(_evaluateExpr(expr, 7.0), closeTo(0.8, 1e-6));
+      expect(
+        _evaluateExpr(expr, 7.0),
+        isNot(closeTo(0.5, 0.05)),
+        reason: 'a linear crawl would put the camera at 0.5 here',
+      );
+    });
+
+    test('keyframe simplification never exceeds the 60-point budget', () {
       final raw = List<FaceTrackPoint>.generate(600, (i) {
         return FaceTrackPoint(
           timeSec: i * 0.5,
@@ -59,7 +102,7 @@ void main() {
 
       final keyframes = FaceDetectionService.buildKeyframes(raw);
 
-      expect(keyframes.length, lessThanOrEqualTo(18));
+      expect(keyframes.length, lessThanOrEqualTo(FaceDetectionService.maxKeyframes));
       expect(keyframes.length, greaterThanOrEqualTo(2));
       expect(keyframes.first.timeSec, raw.first.timeSec);
       expect(keyframes.last.timeSec, raw.last.timeSec);
@@ -201,8 +244,109 @@ void main() {
         FaceTrackPoint(timeSec: 1, normX: 0.2),
         FaceTrackPoint(timeSec: 2, normX: 0.3),
       ], axisX: true);
-      expect(many, contains('if(lte(t\\,1.000)'));
+      expect(many, contains('if(lt(t\\,1.000)'));
       expect(many.split('if(').length - 1, 1);
+    });
+
+    test('norm expression is a balanced tree, deep only logarithmically', () {
+      // 64 keyframes: a linear right-nested chain would nest `if(` 63 levels
+      // deep (paren depth ~129) and overflow FFmpeg's expression parser.
+      final keyframes = List<FaceTrackPoint>.generate(
+        64,
+        (i) => FaceTrackPoint(
+          timeSec: i * 0.5,
+          normX: 0.1 + 0.8 * i / 63,
+          normY: 0.3,
+        ),
+      );
+      final expr = FfmpegAutoReframeService.normExpression(
+        keyframes,
+        axisX: true,
+      );
+
+      // Full binary tree over 63 segments → exactly 62 internal `if` nodes.
+      expect(expr.split('if(').length - 1, 62);
+
+      var depth = 0;
+      var maxDepth = 0;
+      for (final code in expr.codeUnits) {
+        if (code == 0x28) {
+          depth++;
+          if (depth > maxDepth) maxDepth = depth;
+        } else if (code == 0x29) {
+          depth--;
+        }
+      }
+      expect(maxDepth, lessThan(30), reason: 'balanced depth must be ~2*log2');
+      expect(maxDepth, greaterThan(4));
+
+      // Correctness: the evaluator returns the right value along the ramp.
+      expect(_evaluateExpr(expr, 0.0), closeTo(0.1, 1e-6));
+      expect(_evaluateExpr(expr, 31.5), closeTo(0.9, 1e-6));
+      expect(
+        _evaluateExpr(expr, 15.75),
+        closeTo(0.1 + 0.8 * 15.75 / 31.5, 1e-6),
+      );
+    });
+
+    test('frameFill below 100% scales into an inner box and pads black bars',
+        () {
+      const keyframes = [
+        FaceTrackPoint(timeSec: 0, normX: 0.3, normY: 0.4),
+        FaceTrackPoint(timeSec: 2, normX: 0.7, normY: 0.6),
+      ];
+
+      final filter = FfmpegAutoReframeService.buildCropFilter(
+        outW: 1080,
+        outH: 1920,
+        keyframes: keyframes,
+        frameFill: 0.5,
+      );
+      // Inner box 1080x960 → wider effective aspect 1.125 → black bars.
+      expect(filter, contains('gt(iw/ih\\,1.125000)'));
+      expect(filter, contains('scale=1080:960:flags=bilinear'));
+      expect(
+        filter,
+        contains('pad=1080:1920:(1080-1080)/2:(1920-960)/2:black'),
+      );
+      expect(filter, contains('setsar=1'));
+      expect(filter, contains('format=yuv420p'));
+      // The face still sits at the center of the cropped region.
+      expect(filter, contains('iw*(0.3000+'));
+      expect(filter, contains('ih*(0.4000+'));
+
+      // Landscape: bars move to the sides.
+      final landscape = FfmpegAutoReframeService.buildCropFilter(
+        outW: 1920,
+        outH: 1080,
+        keyframes: keyframes,
+        frameFill: 0.8,
+      );
+      expect(landscape, contains('scale=1536:1080:flags=bilinear'));
+      expect(
+        landscape,
+        contains('pad=1920:1080:(1920-1536)/2:(1080-1080)/2:black'),
+      );
+
+      // Full bleed keeps the classic single scale, no padding.
+      final full = FfmpegAutoReframeService.buildCropFilter(
+        outW: 1080,
+        outH: 1920,
+        keyframes: keyframes,
+        frameFill: 1.0,
+      );
+      expect(full, isNot(contains('pad=')));
+      expect(full, contains('scale=1080:1920:flags=bilinear'));
+
+      // innerBoxForFill rounds to multiples of 4 as FFmpeg expects.
+      final box = FfmpegAutoReframeService.innerBoxForFill(
+        outW: 1080,
+        outH: 1920,
+        frameFill: 0.65,
+      );
+      expect(box.boxW, 1080);
+      expect(box.boxH % 4, 0);
+      expect(box.boxH, closeTo(1920 * 0.65, 4));
     });
 
     test('empty track falls back to a safe default position', () {
@@ -254,5 +398,145 @@ void main() {
         greaterThan(CameraMotionPreset.steady.smoothness),
       );
     });
+
+    test('frameFill and selectedSpeakerId round-trip through copyWith', () {
+      const config = ReframeConfig();
+      expect(config.frameFill, 1.0);
+      expect(config.frameFillClamped, 1.0);
+      expect(config.selectedSpeakerId, isNull);
+
+      final lowered = config.copyWith(frameFill: 0.65);
+      expect(lowered.frameFill, 0.65);
+      expect(lowered.frameFillClamped, 0.65);
+
+      // Out-of-range values clamp to the slider bounds.
+      expect(config.copyWith(frameFill: 0.2).frameFillClamped, 0.45);
+      expect(config.copyWith(frameFill: 2.0).frameFillClamped, 1.0);
+
+      final locked = config.copyWith(selectedSpeakerId: 1);
+      expect(locked.selectedSpeakerId, 1);
+      // Unrelated copyWith keeps the lock...
+      expect(locked.copyWith(preset: AspectRatioPreset.square1x1).selectedSpeakerId, 1);
+      // ...while an explicit null returns to Auto Active Speaker.
+      expect(locked.copyWith(selectedSpeakerId: null).selectedSpeakerId, isNull);
+      expect(locked.frameFill, 1.0);
+    });
   });
+}
+
+/// Minimal FFmpeg expression evaluator for the balanced `if(lt(t\,x),a,b)` +
+/// piecewise-linear grammar emitted by `normExpression`. Lets the tests verify
+/// the numeric camera position FFmpeg would compute at any instant.
+double _evaluateExpr(String source, double t) =>
+    _ExprEvaluator(source, t).evaluate();
+
+class _ExprEvaluator {
+  _ExprEvaluator(String source, this.t) : s = source.replaceAll(r'\,', ',');
+
+  final String s;
+  final double t;
+  int i = 0;
+
+  double evaluate() => _expr();
+
+  void _skip() {
+    while (i < s.length && s[i] == ' ') {
+      i++;
+    }
+  }
+
+  void _expectChar(String char) {
+    _skip();
+    if (i >= s.length || s[i] != char) {
+      throw FormatException('Expected "$char" at $i in $s');
+    }
+    i++;
+  }
+
+  bool _startsWith(String token) {
+    _skip();
+    return s.startsWith(token, i);
+  }
+
+  double _expr() {
+    if (_startsWith('if(')) {
+      i += 3;
+      final condition = _comparison();
+      _expectChar(',');
+      final whenTrue = _expr();
+      _expectChar(',');
+      final whenFalse = _expr();
+      _expectChar(')');
+      return condition ? whenTrue : whenFalse;
+    }
+    return _additive();
+  }
+
+  bool _comparison() {
+    if (_startsWith('lt(')) {
+      i += 3;
+      final left = _additive();
+      _expectChar(',');
+      final right = _additive();
+      _expectChar(')');
+      return left < right;
+    }
+    return _additive() != 0;
+  }
+
+  double _additive() {
+    var value = _multiplicative();
+    while (true) {
+      _skip();
+      if (i < s.length && (s[i] == '+' || s[i] == '-')) {
+        final op = s[i];
+        i++;
+        final right = _multiplicative();
+        value = op == '+' ? value + right : value - right;
+      } else {
+        return value;
+      }
+    }
+  }
+
+  double _multiplicative() {
+    var value = _primary();
+    while (true) {
+      _skip();
+      if (i < s.length && (s[i] == '*' || s[i] == '/')) {
+        final op = s[i];
+        i++;
+        final right = _primary();
+        value = op == '*' ? value * right : value / right;
+      } else {
+        return value;
+      }
+    }
+  }
+
+  double _primary() {
+    _skip();
+    if (i < s.length && s[i] == '(') {
+      i++;
+      final value = _expr();
+      _expectChar(')');
+      return value;
+    }
+    if (i < s.length && s[i] == 't') {
+      i++;
+      return t;
+    }
+    final start = i;
+    if (i < s.length && (s[i] == '-' || s[i] == '+')) i++;
+    while (i < s.length) {
+      final code = s.codeUnitAt(i);
+      final isDigit = code >= 0x30 && code <= 0x39;
+      if (!isDigit && s[i] != '.') break;
+      i++;
+    }
+    if (start == i) {
+      throw FormatException('Unexpected token at $i in $s');
+    }
+    return double.parse(s.substring(start, i));
+  }
 }

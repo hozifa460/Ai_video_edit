@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit_config.dart';
@@ -38,8 +39,10 @@ class FfmpegAutoReframeService {
 
   /// Piecewise-linear normalized face coordinate (`0.0 .. 1.0`) over `t`.
   ///
-  /// At most [FaceDetectionService.maxKeyframes] segments are emitted, which
-  /// keeps FFmpeg's expression parser well below its nesting limit.
+  /// Emitted as a **balanced binary tree** of `if(lt(t\,...))` branches, so a
+  /// 64-keyframe trajectory nests only `log2(64) ≈ 6` levels deep instead of
+  /// 64: FFmpeg's expression parser never overflows and speaker cuts survive
+  /// intact.
   static String normExpression(
     List<FaceTrackPoint> keyframes, {
     required bool axisX,
@@ -50,44 +53,101 @@ class FfmpegAutoReframeService {
     if (keyframes.length == 1) {
       return valueOf(keyframes.first).toStringAsFixed(4);
     }
+    return _buildBalancedTimeTree(
+      keyframes,
+      start: 0,
+      end: keyframes.length - 1,
+      axisX: axisX,
+    );
+  }
 
-    final buffer = StringBuffer();
-    var openConditions = 0;
-    for (var i = 0; i < keyframes.length - 1; i++) {
-      final a = keyframes[i];
-      final b = keyframes[i + 1];
+  /// Recursively bisects the keyframe range `[start .. end]`.
+  ///
+  /// `start == end` → constant; `[start .. start+1]` → one linear segment;
+  /// otherwise `if(lt(t\,tMid)\,left\,right)` over the midpoint keyframe.
+  /// Depth is `ceil(log2(keyframes))` — at most ~6 for 60-70 keyframes.
+  static String _buildBalancedTimeTree(
+    List<FaceTrackPoint> keyframes, {
+    required int start,
+    required int end,
+    required bool axisX,
+  }) {
+    double valueOf(FaceTrackPoint p) => axisX ? p.normX : p.normY;
+
+    if (start >= end) return valueOf(keyframes[start]).toStringAsFixed(4);
+    if (end - start == 1) {
+      final a = keyframes[start];
+      final b = keyframes[end];
       final span = (b.timeSec - a.timeSec).abs() < 0.001
           ? 0.001
           : b.timeSec - a.timeSec;
-      final linear =
-          '${valueOf(a).toStringAsFixed(4)}+'
+      return '${valueOf(a).toStringAsFixed(4)}+'
           '(${valueOf(b).toStringAsFixed(4)}-${valueOf(a).toStringAsFixed(4)})'
           '*(t-${a.timeSec.toStringAsFixed(3)})/${span.toStringAsFixed(3)}';
-      if (i < keyframes.length - 2) {
-        buffer.write(
-          'if(lte(t\\,${b.timeSec.toStringAsFixed(3)})\\,$linear\\,',
-        );
-        openConditions++;
-      } else {
-        buffer.write(linear);
-      }
     }
-    buffer.write(')' * openConditions);
-    return buffer.toString();
+
+    final mid = (start + end) >> 1;
+    final tMid = keyframes[mid].timeSec.toStringAsFixed(3);
+    final left = _buildBalancedTimeTree(
+      keyframes,
+      start: start,
+      end: mid,
+      axisX: axisX,
+    );
+    final right = _buildBalancedTimeTree(
+      keyframes,
+      start: mid,
+      end: end,
+      axisX: axisX,
+    );
+    return 'if(lt(t\\,$tMid)\\,$left\\,$right)';
   }
 
-  /// Full `crop + scale + setsar + format` chain for one output size.
+  /// Inner active box of the output canvas for a `frameFill` value.
+  ///
+  /// Portrait/square targets keep the full width and shrink the height;
+  /// landscape targets keep the full height and shrink the width. The box is
+  /// centered, so the discarded proportion becomes black bars.
+  static ({int boxW, int boxH}) innerBoxForFill({
+    required int outW,
+    required int outH,
+    required double frameFill,
+  }) {
+    final fill = frameFill.clamp(0.45, 1.0);
+    if (outH >= outW) {
+      final boxH = max(4, 4 * ((outH * fill) / 4).round());
+      return (boxW: outW, boxH: boxH);
+    }
+    final boxW = max(4, 4 * ((outW * fill) / 4).round());
+    return (boxW: boxW, boxH: outH);
+  }
+
+  /// Full `crop + scale [+ pad] + setsar + format` chain for one output size.
   ///
   /// Inside `crop=w:h:x:y`, `out_w`/`out_h` are the evaluated crop width and
   /// height, so the centering expression stays short: the face center minus
   /// half the crop window, clamped into the frame.
+  ///
+  /// With [frameFill] < 0.99 the source is cropped to the **wider effective
+  /// aspect** of the inner box, scaled into that box, then centered on the
+  /// black canvas with `pad=...:black`.
   static String buildCropFilter({
     required int outW,
     required int outH,
     List<FaceTrackPoint> keyframes = const [],
     bool faceTracking = true,
+    double frameFill = 1.0,
   }) {
-    final targetAspect = (outW / outH).toStringAsFixed(6);
+    final fill = frameFill.clamp(0.45, 1.0);
+    var boxW = outW;
+    var boxH = outH;
+    if (fill < 0.99) {
+      final box = innerBoxForFill(outW: outW, outH: outH, frameFill: fill);
+      boxW = box.boxW;
+      boxH = box.boxH;
+    }
+
+    final targetAspect = (boxW / boxH).toStringAsFixed(6);
     final cropW = cropWidthExpr(targetAspect);
     final cropH = cropHeightExpr(targetAspect);
 
@@ -101,8 +161,13 @@ class FfmpegAutoReframeService {
         ? 'max(0\\,min(ih-out_h\\,ih*($normY)-out_h/2))'
         : '(ih-out_h)/2';
 
-    return "crop=$cropW:$cropH:x='$x':y='$y'"
-        ',scale=$outW:$outH:flags=bilinear,setsar=1,format=yuv420p';
+    final scaleAndPad = fill < 0.99
+        ? 'scale=$boxW:$boxH:flags=bilinear,'
+            'pad=$outW:$outH:($outW-$boxW)/2:($outH-$boxH)/2:black,'
+            'setsar=1,format=yuv420p'
+        : 'scale=$outW:$outH:flags=bilinear,setsar=1,format=yuv420p';
+
+    return "crop=$cropW:$cropH:x='$x':y='$y',$scaleAndPad";
   }
 
   /// Blurred background + full-frame foreground, centered in the target ratio.
@@ -138,6 +203,7 @@ class FfmpegAutoReframeService {
       outH: outH,
       keyframes: keyframes,
       faceTracking: config.style == AutoReframeStyle.smartFaceCrop,
+      frameFill: config.frameFillClamped,
     );
     return '-vf "$filter"';
   }

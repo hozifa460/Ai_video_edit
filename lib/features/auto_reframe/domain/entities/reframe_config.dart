@@ -147,6 +147,10 @@ extension CameraMotionPresetX on CameraMotionPreset {
   }
 }
 
+/// Sentinel letting `copyWith` reset `selectedSpeakerId` back to `null`
+/// (Auto Active Speaker) — `?? this.x` alone can never clear a nullable field.
+const Object _clearSpeaker = Object();
+
 /// Immutable configuration of one Auto Reframe render.
 class ReframeConfig {
   final AspectRatioPreset preset;
@@ -155,12 +159,26 @@ class ReframeConfig {
   final AutoReframeStyle style;
   final CameraMotionPreset motion;
 
+  /// Fraction of the output canvas covered by the cropped video
+  /// (`0.45 .. 1.0`, default `1.0` = full bleed, no bars).
+  ///
+  /// Below `1.0` the remaining top/bottom (or left/right) space of the output
+  /// canvas is filled with clean black bars while the crop window still
+  /// centers on the tracked face.
+  final double frameFill;
+
+  /// `null` = auto active speaker; otherwise the `DetectedSpeakerProfile.id`
+  /// to keep locked on camera for the whole clip.
+  final int? selectedSpeakerId;
+
   const ReframeConfig({
     this.preset = AspectRatioPreset.tiktok9x16,
     this.customWidthRatio = 3,
     this.customHeightRatio = 4,
     this.style = AutoReframeStyle.smartFaceCrop,
     this.motion = CameraMotionPreset.balanced,
+    this.frameFill = 1.0,
+    this.selectedSpeakerId,
   });
 
   ReframeConfig copyWith({
@@ -169,6 +187,8 @@ class ReframeConfig {
     double? customHeightRatio,
     AutoReframeStyle? style,
     CameraMotionPreset? motion,
+    double? frameFill,
+    Object? selectedSpeakerId = _clearSpeaker,
   }) {
     return ReframeConfig(
       preset: preset ?? this.preset,
@@ -176,8 +196,15 @@ class ReframeConfig {
       customHeightRatio: customHeightRatio ?? this.customHeightRatio,
       style: style ?? this.style,
       motion: motion ?? this.motion,
+      frameFill: frameFill ?? this.frameFill,
+      selectedSpeakerId: identical(selectedSpeakerId, _clearSpeaker)
+          ? this.selectedSpeakerId
+          : selectedSpeakerId as int?,
     );
   }
+
+  /// `frameFill` clamped into its valid slider range.
+  double get frameFillClamped => frameFill.clamp(0.45, 1.0);
 
   double get aspectRatio {
     if (preset == AspectRatioPreset.custom) {

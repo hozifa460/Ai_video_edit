@@ -32,6 +32,11 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   String? _error;
 
   FaceTrackResult? _track;
+
+  /// The trajectory actually rendered/previewed: auto active-speaker path, or
+  /// the locked person's path when `selectedSpeakerId` is set. Recomputed only
+  /// when the analysis, motion preset or speaker selection changes.
+  FaceTrackResult? _effectiveTrack;
   bool _analyzing = false;
   double _analysisProgress = 0;
   String _analysisStatus = '';
@@ -139,7 +144,112 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       if (result == null) {
         _analysisStatus = 'No face found — center crop will be used';
       }
+      _recomputeEffectiveTrack();
     });
+  }
+
+  /// Resolves the path used by preview + render: the auto active-speaker
+  /// trajectory, or the locked person's own trajectory when a speaker chip is
+  /// selected (`selectedSpeakerId != null`).
+  void _recomputeEffectiveTrack() {
+    final track = _track;
+    if (track == null) {
+      _effectiveTrack = null;
+      return;
+    }
+    final id = _config.selectedSpeakerId;
+    if (id == null) {
+      _effectiveTrack = track;
+      return;
+    }
+    DetectedSpeakerProfile? profile;
+    for (final candidate in track.speakers) {
+      if (candidate.id == id) {
+        profile = candidate;
+        break;
+      }
+    }
+    if (profile == null) {
+      _effectiveTrack = track;
+      return;
+    }
+    _effectiveTrack = FaceTrackResult(
+      rawPoints: profile.rawPoints,
+      keyframes: FaceDetectionService.buildKeyframes(
+        profile.rawPoints,
+        deadZone: _config.motion.deadZone,
+        smoothness: _config.motion.smoothness,
+      ),
+      avgNormX: profile.avgNormX,
+      avgNormY: profile.avgNormY,
+      facesDetectedCount: track.facesDetectedCount,
+      speakers: track.speakers,
+      sourceWidth: track.sourceWidth,
+      sourceHeight: track.sourceHeight,
+    );
+  }
+
+  void _selectSpeaker(int? speakerId) {
+    setState(() {
+      _config = _config.copyWith(selectedSpeakerId: speakerId);
+      _recomputeEffectiveTrack();
+    });
+  }
+
+  /// Tap-to-lock: snaps the selection to the detected person nearest the tap.
+  void _onPreviewTap(double normX, double normY) {
+    final track = _track;
+    if (track == null || track.speakers.isEmpty) return;
+
+    DetectedSpeakerProfile? nearest;
+    var bestDistance = double.infinity;
+    for (final profile in track.speakers) {
+      final (px, py) = _positionAt(profile.rawPoints, _positionSeconds);
+      final dx = px - normX;
+      final dy = py - normY;
+      final distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        nearest = profile;
+      }
+    }
+    if (nearest == null) return;
+    _selectSpeaker(nearest.id);
+  }
+
+  /// Position of a trajectory at one instant (nearest sampled point).
+  static (double, double) _positionAt(
+    List<FaceTrackPoint> points,
+    double timeSec,
+  ) {
+    if (points.isEmpty) return (0.5, 0.42);
+    var best = points.first;
+    var bestDelta = double.infinity;
+    for (final point in points) {
+      final delta = (point.timeSec - timeSec).abs();
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = point;
+      }
+    }
+    return (best.normX, best.normY);
+  }
+
+  /// One marker per detected person at [timeSec]; the explicitly selected one
+  /// is flagged so the painter can highlight it.
+  List<ReframeFaceMarker> _faceMarkersAt(double timeSec) {
+    final track = _track;
+    if (track == null || track.speakers.isEmpty) return const [];
+    final selectedId = _config.selectedSpeakerId;
+    return [
+      for (final profile in track.speakers)
+        ReframeFaceMarker(
+          normX: _positionAt(profile.rawPoints, timeSec).$1,
+          normY: _positionAt(profile.rawPoints, timeSec).$2,
+          label: profile.label,
+          locked: profile.id == selectedId,
+        ),
+    ];
   }
 
   /// Re-smooths the already measured trajectory. No FFmpeg, no ML Kit: the
@@ -159,10 +269,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           avgNormX: track.avgNormX,
           avgNormY: track.avgNormY,
           facesDetectedCount: track.facesDetectedCount,
+          speakers: track.speakers,
           sourceWidth: track.sourceWidth,
           sourceHeight: track.sourceHeight,
         );
       }
+      _recomputeEffectiveTrack();
     });
   }
 
@@ -237,7 +349,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       videoPath: widget.videoPath,
       outputPath: outputPath,
       config: _config,
-      track: _track,
+      track: _effectiveTrack,
       durationMs: _duration.inMilliseconds,
       onProgress: (value, message) {
         progress.value = value;
@@ -306,6 +418,10 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             const SizedBox(height: 12),
             if (_analyzing) _buildAnalysisBanner(),
             if (_track != null) _buildTrackSummary(),
+            if (_track != null && _track!.speakers.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _buildSpeakerSelector(),
+            ],
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -322,6 +438,10 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             _buildStyleSelector(),
             const SizedBox(height: 16),
             _buildMotionSelector(),
+            if (_config.style != AutoReframeStyle.blurBackgroundFrame) ...[
+              const SizedBox(height: 16),
+              _buildFrameFillControl(),
+            ],
             const SizedBox(height: 24),
             ElevatedButton.icon(
               onPressed: _rendering ? null : _render,
@@ -356,8 +476,9 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     final aspect = size.width > 0 && size.height > 0
         ? size.width / size.height
         : 16 / 9;
-    final track = _track;
-    final (normX, normY) = track?.sampleAt(_positionSeconds) ?? (0.5, 0.42);
+    final effective = _effectiveTrack;
+    final (normX, normY) = effective?.sampleAt(_positionSeconds) ?? (0.5, 0.42);
+    final faces = _faceMarkersAt(_positionSeconds);
 
     return Column(
       children: [
@@ -365,38 +486,58 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           borderRadius: BorderRadius.circular(12),
           child: AspectRatio(
             aspectRatio: aspect,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                VideoPlayer(controller),
-                CustomPaint(
-                  painter: ReframeOverlayPainter(
-                    targetAspect: _config.aspectRatio,
-                    normX: normX,
-                    normY: normY,
-                    style: _config.style,
-                    speakerLocked: track != null,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final previewW = constraints.maxWidth;
+                final previewH = constraints.maxHeight;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (details) {
+                    if (previewW <= 0 || previewH <= 0) return;
+                    _onPreviewTap(
+                      (details.localPosition.dx / previewW).clamp(0.0, 1.0),
+                      (details.localPosition.dy / previewH).clamp(0.0, 1.0),
+                    );
+                  },
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      VideoPlayer(controller),
+                      CustomPaint(
+                        painter: ReframeOverlayPainter(
+                          targetAspect: _config.aspectRatio,
+                          outW: _config.outputSize.$1,
+                          outH: _config.outputSize.$2,
+                          frameFill: _config.frameFillClamped,
+                          normX: normX,
+                          normY: normY,
+                          style: _config.style,
+                          speakerLocked: effective != null,
+                          faces: faces,
+                        ),
+                      ),
+                      Positioned(
+                        right: 8,
+                        bottom: 8,
+                        child: IconButton.filledTonal(
+                          onPressed: () {
+                            setState(() {
+                              controller.value.isPlaying
+                                  ? controller.pause()
+                                  : controller.play();
+                            });
+                          },
+                          icon: Icon(
+                            controller.value.isPlaying
+                                ? Icons.pause
+                                : Icons.play_arrow,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                Positioned(
-                  right: 8,
-                  bottom: 8,
-                  child: IconButton.filledTonal(
-                    onPressed: () {
-                      setState(() {
-                        controller.value.isPlaying
-                            ? controller.pause()
-                            : controller.play();
-                      });
-                    },
-                    icon: Icon(
-                      controller.value.isPlaying
-                          ? Icons.pause
-                          : Icons.play_arrow,
-                    ),
-                  ),
-                ),
-              ],
+                );
+              },
             ),
           ),
         ),
@@ -574,6 +715,144 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
+  /// `45% .. 100%` video-fill slider with quick presets. Lower fill widens the
+  /// crop (more scene visible) and adds proportional black bars.
+  Widget _buildFrameFillControl() {
+    final fill = _config.frameFillClamped;
+    final (outW, outH) = _config.outputSize;
+    final box = FfmpegAutoReframeService.innerBoxForFill(
+      outW: outW,
+      outH: outH,
+      frameFill: fill,
+    );
+    final barText = outH >= outW
+        ? 'Black bars: '
+            '${(((outH - box.boxH) / 2) / outH * 100).toStringAsFixed(0)}% '
+            'top + bottom'
+        : 'Black bars: '
+            '${(((outW - box.boxW) / 2) / outW * 100).toStringAsFixed(0)}% '
+            'left + right';
+
+    const presets = <(double, String)>[
+      (1.0, '100% Full'),
+      (0.8, '80%'),
+      (0.65, '65%'),
+      (0.5, '50%'),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Video Fill / Black Space',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Text(
+              '${(fill * 100).toStringAsFixed(0)}%',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFE040FB),
+              ),
+            ),
+          ],
+        ),
+        Slider(
+          value: fill,
+          min: 0.45,
+          max: 1.0,
+          divisions: 106,
+          label: '${(fill * 100).toStringAsFixed(0)}%',
+          onChanged: (value) =>
+              setState(() => _config = _config.copyWith(frameFill: value)),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final (value, label) in presets)
+              ChoiceChip(
+                label: Text(label),
+                selected: (fill - value).abs() < 0.005,
+                onSelected: (_) =>
+                    setState(() => _config = _config.copyWith(frameFill: value)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Lower fill shows more of the scene around the speaker · $barText',
+          style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+        ),
+      ],
+    );
+  }
+
+  /// `Auto Active Speaker` + one chip per detected person; tapping a face on
+  /// the preview selects the same person.
+  Widget _buildSpeakerSelector() {
+    final track = _track;
+    if (track == null || track.speakers.isEmpty) return const SizedBox.shrink();
+    final selectedId = _config.selectedSpeakerId;
+    String? selectedLabel;
+    for (final profile in track.speakers) {
+      if (profile.id == selectedId) selectedLabel = profile.label;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Target Face / Speaker',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ChoiceChip(
+              avatar: Icon(
+                Icons.record_voice_over,
+                size: 18,
+                color: selectedId == null
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              label: const Text('Auto Active Speaker'),
+              selected: selectedId == null,
+              onSelected: (_) => _selectSpeaker(null),
+            ),
+            for (final profile in track.speakers)
+              ChoiceChip(
+                avatar: Icon(
+                  Icons.person,
+                  size: 18,
+                  color: selectedId == profile.id
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                label: Text(profile.label),
+                selected: selectedId == profile.id,
+                onSelected: (_) => _selectSpeaker(profile.id),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          selectedId == null
+              ? 'Switches to whoever is speaking · tap a face to lock'
+              : 'Locked on $selectedLabel · tap a face to switch',
+          style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
+        ),
+      ],
+    );
+  }
+
   static String _formatTime(double seconds) {
     final total = seconds < 0 ? 0 : seconds.round();
     final minutes = total ~/ 60;
@@ -582,37 +861,76 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 }
 
-/// Live overlay: dimmed area outside the crop window, a glowing framing
-/// rectangle at the tracked speaker position, and a "Speaker Locked" marker.
+/// One detected person drawn on the preview (average trajectory position at
+/// the current instant).
+class ReframeFaceMarker {
+  final double normX;
+  final double normY;
+  final String label;
+  final bool locked;
+
+  const ReframeFaceMarker({
+    required this.normX,
+    required this.normY,
+    required this.label,
+    this.locked = false,
+  });
+}
+
+/// Live overlay: dimmed area outside the crop window, all detected faces with
+/// the selected speaker highlighted, black-bar bands for `frameFill`, and a
+/// "Speaker Locked" marker.
 class ReframeOverlayPainter extends CustomPainter {
   final double targetAspect;
+  final int outW;
+  final int outH;
+  final double frameFill;
   final double normX;
   final double normY;
   final AutoReframeStyle style;
   final bool speakerLocked;
+  final List<ReframeFaceMarker> faces;
 
   const ReframeOverlayPainter({
     required this.targetAspect,
+    required this.outW,
+    required this.outH,
+    required this.frameFill,
     required this.normX,
     required this.normY,
     required this.style,
     required this.speakerLocked,
+    this.faces = const [],
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.width <= 0 || size.height <= 0) return;
-    final aspect = targetAspect > 0 ? targetAspect : 1.0;
 
-    // Universal crop math in preview coordinates, mirroring the FFmpeg filter.
+    // Mirror the FFmpeg geometry exactly: effective aspect of the inner box
+    // after `frameFill`, then the source crop window, then the black bars.
+    final fill = frameFill.clamp(0.45, 1.0);
+    var boxW = outW;
+    var boxH = outH;
+    if (fill < 0.99) {
+      final box = FfmpegAutoReframeService.innerBoxForFill(
+        outW: outW,
+        outH: outH,
+        frameFill: fill,
+      );
+      boxW = box.boxW;
+      boxH = box.boxH;
+    }
+    final effectiveAspect = boxW / boxH > 0 ? boxW / boxH : 1.0;
+
     double cropW;
     double cropH;
-    if (size.width / size.height > aspect) {
+    if (size.width / size.height > effectiveAspect) {
       cropH = size.height;
-      cropW = cropH * aspect;
+      cropW = cropH * effectiveAspect;
     } else {
       cropW = size.width;
-      cropH = cropW / aspect;
+      cropH = cropW / effectiveAspect;
     }
 
     final faceTracking = style == AutoReframeStyle.smartFaceCrop;
@@ -645,7 +963,89 @@ class ReframeOverlayPainter extends CustomPainter {
         ..strokeWidth = 1.6,
     );
 
-    // Crosshair at the actual tracked face center.
+    // Black bars added by `pad=...:black`, drawn at the exact final proportion
+    // inside the crop window (portrait → top/bottom, landscape → left/right).
+    final portrait = outH >= outW;
+    final barFraction = (1 - (portrait ? boxH / outH : boxW / outW)) / 2;
+    if (barFraction > 0.004) {
+      final barPaint = Paint()..color = Colors.black;
+      if (portrait) {
+        final barH = cropRect.height * barFraction;
+        canvas.drawRect(
+          Rect.fromLTWH(cropRect.left, cropRect.top, cropRect.width, barH),
+          barPaint,
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(
+            cropRect.left,
+            cropRect.bottom - barH,
+            cropRect.width,
+            barH,
+          ),
+          barPaint,
+        );
+      } else {
+        final barW = cropRect.width * barFraction;
+        canvas.drawRect(
+          Rect.fromLTWH(cropRect.left, cropRect.top, barW, cropRect.height),
+          barPaint,
+        );
+        canvas.drawRect(
+          Rect.fromLTWH(
+            cropRect.right - barW,
+            cropRect.top,
+            barW,
+            cropRect.height,
+          ),
+          barPaint,
+        );
+      }
+    }
+
+    // Every detected person; the selected speaker gets a filled highlight.
+    for (final face in faces) {
+      final center = Offset(face.normX * size.width, face.normY * size.height);
+      final color = face.locked
+          ? const Color(0xFFE040FB)
+          : const Color(0xFF00E5FF);
+      canvas.drawCircle(
+        center,
+        15,
+        Paint()
+          ..color = color.withValues(alpha: face.locked ? 0.35 : 0.18),
+      );
+      canvas.drawCircle(
+        center,
+        15,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = face.locked ? 3 : 1.6,
+      );
+      if (face.locked) {
+        final label = TextPainter(
+          text: TextSpan(
+            text: face.label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              backgroundColor: Color(0xAA9C27B0),
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        label.paint(
+          canvas,
+          Offset(
+            (center.dx - label.width / 2).clamp(0.0, size.width - label.width),
+            (center.dy + 18).clamp(0.0, size.height - label.height),
+          ),
+        );
+      }
+    }
+
+    // Crosshair at the actual tracked face center (the crop center).
     final faceCenter = Offset(centerX, centerY);
     final cross = Paint()
       ..color = const Color(0xFF00E5FF)
@@ -688,7 +1088,11 @@ class ReframeOverlayPainter extends CustomPainter {
     return oldDelegate.normX != normX ||
         oldDelegate.normY != normY ||
         oldDelegate.targetAspect != targetAspect ||
+        oldDelegate.outW != outW ||
+        oldDelegate.outH != outH ||
+        oldDelegate.frameFill != frameFill ||
         oldDelegate.style != style ||
-        oldDelegate.speakerLocked != speakerLocked;
+        oldDelegate.speakerLocked != speakerLocked ||
+        oldDelegate.faces.length != faces.length;
   }
 }
