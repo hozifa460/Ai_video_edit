@@ -470,16 +470,22 @@ class _SpeakerTrack {
     return bestId;
   }
 
+  /// Confidence (`0.0 .. 1.0`) that [clusterId] belongs to this person.
+  double voiceAffinityForCluster(int clusterId) {
+    if (clusterId < 0) return 0.0;
+    final myAffinity = voiceClusterAffinity[clusterId] ?? 0.0;
+    if (myAffinity < 1.15) return 0.0;
+    var totalAffinity = 0.0;
+    voiceClusterAffinity.forEach((_, v) => totalAffinity += v);
+    final specificity = totalAffinity > 0 ? (myAffinity / totalAffinity) : 1.0;
+    return (min(myAffinity, 6.0) / 6.0) * (0.30 + 0.70 * specificity);
+  }
+
   /// Confidence (`0.0 .. 1.0`) that the currently active voice cluster belongs
   /// to this person.
   double get currentVoiceMatchBonus {
     if (!currentFrameVoiced || currentFrameVoiceCluster < 0) return 0.0;
-    final myAffinity = voiceClusterAffinity[currentFrameVoiceCluster] ?? 0.0;
-    if (myAffinity < 1.35) return 0.0;
-    var totalAffinity = 0.0;
-    voiceClusterAffinity.forEach((_, v) => totalAffinity += v);
-    final specificity = totalAffinity > 0 ? (myAffinity / totalAffinity) : 1.0;
-    return (min(myAffinity, 6.0) / 6.0) * (0.35 + 0.65 * specificity);
+    return voiceAffinityForCluster(currentFrameVoiceCluster);
   }
 
   void recordSpeechSample(
@@ -512,7 +518,7 @@ class _SpeakerTrack {
 
     final double effectiveDelta;
     if (!audio.isVoicedSpeech) {
-      effectiveDelta = rawVisualDelta * 0.18;
+      effectiveDelta = rawVisualDelta * 0.15;
     } else {
       final syncBoost = 0.72 + 0.68 * avSyncScore;
       final energyBoost = 0.80 + 0.40 * audioDrive;
@@ -524,7 +530,7 @@ class _SpeakerTrack {
       lipDeltas.removeAt(0);
     }
 
-    if (effectiveDelta >= 0.0125 && audio.isVoicedSpeech) {
+    if (effectiveDelta >= 0.0120 && audio.isVoicedSpeech) {
       silentFrames = 0;
       lastSpokeSec = nowSec;
       speakingHitCount++;
@@ -533,26 +539,23 @@ class _SpeakerTrack {
     }
   }
 
-  /// Active-speaker score combining:
-  /// 1) Audio-Visual synchronized inner-lip articulation (`recentActivity * speechMult`)
-  /// 2) On-device Voice Diarization identity lock (`voiceBonus`)
-  /// 3) Foreground subject prominence (`prominenceBonus`)
+  /// Active-speaker score with zero face-size bias (larger silent faces never
+  /// outscore smaller speaking faces).
   double get score {
     if (isSilhouette) {
-      return silhouetteActivity * 10.0 + areaNorm * 0.04;
+      return silhouetteActivity * 10.0 + areaNorm * 0.02;
     }
     final activeCount = speakingFrames;
-    final speechMult = activeCount >= 2 ? 19.0 : (activeCount == 1 ? 9.5 : 2.8);
+    final speechMult = activeCount >= 2 ? 20.0 : (activeCount == 1 ? 10.0 : 2.2);
     final avMultiplier = 0.75 + 0.55 * avSyncScore;
-    final prominenceBonus =
-        areaNorm * 0.42 + foregroundRatio.clamp(0.0, 1.0) * 0.045;
-    final voiceBonus = currentVoiceMatchBonus * 0.26;
+    final tieBreaker = areaNorm * 0.035;
+    final voiceBonus = currentVoiceMatchBonus * 0.34;
 
     var s = recentActivity * speechMult * avMultiplier +
-        (activeCount >= 2 ? 0.065 * activeCount : 0.0) +
+        (activeCount >= 2 ? 0.075 * activeCount : 0.0) +
         voiceBonus +
-        prominenceBonus +
-        0.015 * (min(hits, 8) / 8);
+        tieBreaker +
+        0.010 * (min(hits, 8) / 8);
 
     if (lastMoveDelta > 0.12 && activeCount < 2 && voiceBonus < 0.08) {
       s *= 0.25;
@@ -571,6 +574,54 @@ class _SpeakerTrack {
     }
     return total / lipDeltas.length;
   }
+}
+
+/// Per-candidate observation in a single frame during Pass 1.
+class _FrameCandidateObs {
+  const _FrameCandidateObs({
+    required this.track,
+    required this.normX,
+    required this.normY,
+    required this.normW,
+    required this.normH,
+    required this.isSilhouette,
+    required this.rawVisualDelta,
+    required this.effectiveLipDelta,
+    required this.lipOpen,
+    required this.avSyncScore,
+    required this.silMotion,
+  });
+
+  final _SpeakerTrack track;
+  final double normX;
+  final double normY;
+  final double normW;
+  final double normH;
+  final bool isSilhouette;
+  final double rawVisualDelta;
+  final double effectiveLipDelta;
+  final double lipOpen;
+  final double avSyncScore;
+  final double silMotion;
+}
+
+/// Complete Pass-1 observation for a single analysis frame.
+class _FrameObservation {
+  _FrameObservation({
+    required this.frameIndex,
+    required this.timeSec,
+    required this.shotIndex,
+    required this.isCut,
+    required this.audio,
+    required this.candidates,
+  });
+
+  final int frameIndex;
+  final double timeSec;
+  final int shotIndex;
+  final bool isCut;
+  final AudioFrameFeatures audio;
+  final List<_FrameCandidateObs> candidates;
 }
 
 /// Foreground-subject observation produced by
@@ -819,8 +870,8 @@ class FaceDetectionService {
     final mP90 = max(mP15 + 1e-4, sortedM[(sortedM.length * 0.90).floor()]);
 
     final clusters = <_VoiceCluster>[];
-    const maxClusters = 4;
-    const clusterMergeThreshold = 0.42;
+    const maxClusters = 6;
+    const clusterMergeThreshold = 0.34;
     var activeClusterId = -1;
     var activeClusterRun = 0;
 
@@ -865,7 +916,7 @@ class FaceDetectionService {
           var bestDist = double.infinity;
           for (final c in clusters) {
             var d = c.distanceTo(tempFeature);
-            if (c.id == activeClusterId) d *= 0.82;
+            if (c.id == activeClusterId) d *= 0.84;
             if (d < bestDist) {
               bestDist = d;
               bestCluster = c;
@@ -922,6 +973,32 @@ class FaceDetectionService {
           voiceClusterId: assignedCluster,
         ),
       );
+    }
+
+    // 3-frame continuity smoothing on voiceClusterId so single-frame pitch
+    // jitter never splits a sentence mid-word.
+    for (var f = 1; f + 1 < out.length; f++) {
+      final prev = out[f - 1];
+      final curr = out[f];
+      final next = out[f + 1];
+      if (curr.isVoicedSpeech &&
+          prev.isVoicedSpeech &&
+          next.isVoicedSpeech &&
+          prev.voiceClusterId >= 0 &&
+          prev.voiceClusterId == next.voiceClusterId &&
+          curr.voiceClusterId != prev.voiceClusterId) {
+        out[f] = AudioFrameFeatures(
+          speechEnergy: curr.speechEnergy,
+          syllableModulation: curr.syllableModulation,
+          pitchHz: curr.pitchHz,
+          pitchConfidence: curr.pitchConfidence,
+          lowBandRatio: curr.lowBandRatio,
+          midBandRatio: curr.midBandRatio,
+          highBandRatio: curr.highBandRatio,
+          isVoicedSpeech: curr.isVoicedSpeech,
+          voiceClusterId: prev.voiceClusterId,
+        );
+      }
     }
     return out;
   }
@@ -1127,21 +1204,14 @@ class FaceDetectionService {
       if (imgWidth <= 0 || imgHeight <= 0) return null;
 
       final tracks = <int, _SpeakerTrack>{};
-      final silhouetteVoiceAffinity = <int, double>{};
-      final activePoints = <FaceTrackPoint>[];
+      final observations = <_FrameObservation>[];
       final shotStarts = <double>[startSec];
+      var currentShotIndex = 0;
       var facesDetectedCount = 0;
       var silhouetteHits = 0;
       Uint8List? prevGridBytes;
       Uint8List? prevMouthGridBytes;
-      _SpeakerTrack? currentSpeaker;
-      var lastX = 0.5;
-      var lastY = 0.45;
-      var lastW = 0.16;
-      var lastH = 0.24;
-      double? lastFaceSeenSec;
-      var sceneStartPointIdx = 0;
-      var sceneSpeakerConfirmed = false;
+      _SpeakerTrack? lastPrimaryFaceTrack;
       final cropBmpPath = '${framesDir.path}/face_crop.bmp';
 
       final minFaceHeight = imgHeight * 0.062;
@@ -1207,16 +1277,16 @@ class FaceDetectionService {
           if (rawCut) {
             var foregroundFaceContinuous = false;
             if (matchedScdTime == null &&
-                currentSpeaker != null &&
-                !currentSpeaker.isSilhouette &&
-                (timeSec - currentSpeaker.lastSeenSec) <= 0.7 &&
+                lastPrimaryFaceTrack != null &&
+                !lastPrimaryFaceTrack.isSilhouette &&
+                (timeSec - lastPrimaryFaceTrack.lastSeenSec) <= 0.7 &&
                 sortedFaces.isNotEmpty) {
               final topBox = sortedFaces.first.boundingBox;
               final nx0 = (topBox.left / imgWidth).clamp(0.0, 1.0);
               final ny0 = (topBox.top / imgHeight).clamp(0.0, 1.0);
               final nx1 = (topBox.right / imgWidth).clamp(0.0, 1.0);
               final ny1 = (topBox.bottom / imgHeight).clamp(0.0, 1.0);
-              final iou = _boxOverlap(currentSpeaker, nx0, ny0, nx1, ny1);
+              final iou = _boxOverlap(lastPrimaryFaceTrack, nx0, ny0, nx1, ny1);
               if (iou >= 0.28) {
                 foregroundFaceContinuous = true;
               }
@@ -1227,9 +1297,8 @@ class FaceDetectionService {
             if (matchedScdTime != null) {
               timeSec = matchedScdTime;
             }
-            currentSpeaker = null;
-            sceneStartPointIdx = activePoints.length;
-            sceneSpeakerConfirmed = false;
+            currentShotIndex++;
+            lastPrimaryFaceTrack = null;
             if (timeSec - shotStarts.last >= 0.75) {
               shotStarts.add(timeSec);
             }
@@ -1237,6 +1306,7 @@ class FaceDetectionService {
         }
 
         final present = <_SpeakerTrack>[];
+        final frameCands = <_FrameCandidateObs>[];
         final faceBoxes = <({double x0, double y0, double x1, double y1})>[];
 
         final foregroundCandidates = <Face>[];
@@ -1264,7 +1334,6 @@ class FaceDetectionService {
           final area = fw * fh;
 
           facesDetectedCount++;
-          lastFaceSeenSec = timeSec;
 
           final cx = ((nx0 + nx1) / 2).clamp(0.0, 1.0);
           final cy = ((ny0 + ny1) / 2).clamp(0.0, 1.0);
@@ -1352,6 +1421,7 @@ class FaceDetectionService {
               ..foregroundRatio = fgRatio;
             tracks[created.id] = created;
             present.add(created);
+            lastPrimaryFaceTrack ??= created;
             created.lastMoveDelta = 0;
             _updateLipActivity(
               created,
@@ -1385,6 +1455,23 @@ class FaceDetectionService {
                 normW: fw,
                 normH: fh,
                 speakerId: created.id,
+              ),
+            );
+            frameCands.add(
+              _FrameCandidateObs(
+                track: created,
+                normX: cx,
+                normY: cy,
+                normW: fw,
+                normH: fh,
+                isSilhouette: false,
+                rawVisualDelta: 0.0,
+                effectiveLipDelta: 0.0,
+                lipOpen: created.lipOpenHistory.isNotEmpty
+                    ? created.lipOpenHistory.last
+                    : 0.0,
+                avSyncScore: 0.5,
+                silMotion: 0.0,
               ),
             );
             continue;
@@ -1453,13 +1540,34 @@ class FaceDetectionService {
             ),
           );
           present.add(track);
+          lastPrimaryFaceTrack = track;
+          frameCands.add(
+            _FrameCandidateObs(
+              track: track,
+              normX: cx,
+              normY: cy,
+              normW: fw,
+              normH: fh,
+              isSilhouette: false,
+              rawVisualDelta: track.rawVisualDeltas.isNotEmpty
+                  ? track.rawVisualDeltas.last
+                  : 0.0,
+              effectiveLipDelta:
+                  track.lipDeltas.isNotEmpty ? track.lipDeltas.last : 0.0,
+              lipOpen: track.lipOpenHistory.isNotEmpty
+                  ? track.lipOpenHistory.last
+                  : 0.0,
+              avSyncScore: track.avSyncScore,
+              silMotion: 0.0,
+            ),
+          );
         }
 
         if (!cut && mouthGrid != null) {
           for (final track in tracks.values) {
             if (track.isSilhouette || present.contains(track)) continue;
             final unseenFor = timeSec - track.lastDirectFaceSec;
-            if (unseenFor <= 0 || unseenFor > 1.6 || track.hits < 2) continue;
+            if (unseenFor <= 0 || unseenFor > 2.2 || track.hits < 2) continue;
             final coasted = _coastUnseenTrackViaTorso(
               track: track,
               mouthGrid: mouthGrid,
@@ -1470,13 +1578,6 @@ class FaceDetectionService {
             if (coasted != null) {
               track.currentFrameVoiced = audioFrame.isVoicedSpeech;
               track.currentFrameVoiceCluster = audioFrame.voiceClusterId;
-              if (audioFrame.isVoicedSpeech &&
-                  track.currentVoiceMatchBonus >= 0.30) {
-                track.lastSpokeSec = timeSec;
-                track.silentFrames = 0;
-              } else {
-                track.silentFrames++;
-              }
               _updateTrack(
                 track,
                 timeSec,
@@ -1492,21 +1593,39 @@ class FaceDetectionService {
                   normY: coasted.cy,
                   normW: track.normW,
                   normH: track.normH,
-                  isSpeaking: track.speakingFrames >= 1 ||
-                      track.currentVoiceMatchBonus >= 0.30,
+                  isSpeaking: track.speakingFrames >= 1,
                   speakerId: track.id,
                 ),
               );
               present.add(track);
+              frameCands.add(
+                _FrameCandidateObs(
+                  track: track,
+                  normX: coasted.cx,
+                  normY: coasted.cy,
+                  normW: track.normW,
+                  normH: track.normH,
+                  isSilhouette: false,
+                  rawVisualDelta: track.rawVisualDeltas.isNotEmpty
+                      ? track.rawVisualDeltas.last * 0.55
+                      : 0.0,
+                  effectiveLipDelta: track.lipDeltas.isNotEmpty
+                      ? track.lipDeltas.last * 0.55
+                      : 0.0,
+                  lipOpen: track.lipOpenHistory.isNotEmpty
+                      ? track.lipOpenHistory.last
+                      : 0.0,
+                  avSyncScore: track.avSyncScore,
+                  silMotion: 0.0,
+                ),
+              );
             }
           }
         }
 
-        _updateVoiceClusterBindings(present, audioFrame);
-
-        final visibleFaces = List<_SpeakerTrack>.of(present);
+        final visibleFacesCount = present.length;
         SilhouetteSubject? subject;
-        if (grid != null && visibleFaces.length <= 2 && maxFaceArea < 0.055) {
+        if (grid != null && visibleFacesCount <= 2 && maxFaceArea < 0.055) {
           subject = detectSilhouetteOrMotionSubject(
             grid,
             silhouetteGridWidth,
@@ -1517,7 +1636,6 @@ class FaceDetectionService {
         }
         if (subject != null) {
           silhouetteHits++;
-          lastFaceSeenSec = timeSec;
           var subjectTrack = _associateSilhouette(
             tracks,
             nowSec: timeSec,
@@ -1526,19 +1644,13 @@ class FaceDetectionService {
             allowExisting: !cut,
           );
           if (subjectTrack == null) {
-            subjectTrack = _SpeakerTrack(tracks.length)
-              ..isSilhouette = true
-              ..voiceClusterAffinity.addAll(silhouetteVoiceAffinity);
+            subjectTrack = _SpeakerTrack(tracks.length)..isSilhouette = true;
             tracks[subjectTrack.id] = subjectTrack;
-          } else if (subjectTrack.voiceClusterAffinity.isEmpty &&
-              silhouetteVoiceAffinity.isNotEmpty) {
-            subjectTrack.voiceClusterAffinity.addAll(silhouetteVoiceAffinity);
           }
-
           subjectTrack.currentFrameVoiced = audioFrame.isVoicedSpeech;
           subjectTrack.currentFrameVoiceCluster = audioFrame.voiceClusterId;
 
-          var motionActivity = prevGridBytes != null && !cut
+          final motionActivity = prevGridBytes != null && !cut
               ? _silhouetteMotionActivity(
                   prevGridBytes,
                   grid!,
@@ -1550,57 +1662,6 @@ class FaceDetectionService {
                   subject.normH,
                 )
               : 0.0;
-
-          var isSilSpeaking = false;
-          if (visibleFaces.isEmpty) {
-            final act = max(motionActivity, 0.06);
-            subjectTrack.silhouetteActivity = prevGridBytes != null && !cut
-                ? subjectTrack.silhouetteActivity * 0.35 + act * 0.65
-                : act;
-            subjectTrack.lastSpokeSec = timeSec;
-            subjectTrack.silentFrames = 0;
-            isSilSpeaking = true;
-            if (audioFrame.isVoicedSpeech && audioFrame.voiceClusterId >= 0) {
-              final cId = audioFrame.voiceClusterId;
-              final nextAff =
-                  min(10.0, (silhouetteVoiceAffinity[cId] ?? 0.0) + 0.65);
-              silhouetteVoiceAffinity[cId] = nextAff;
-              subjectTrack.voiceClusterAffinity[cId] = nextAff;
-              subjectTrack.speakingHitCount++;
-            }
-          } else {
-            final anyVisibleSpeaking = visibleFaces.any(
-              (v) =>
-                  v.speakingFrames >= 2 ||
-                  (v.speakingFrames >= 1 && v.recentActivity >= 0.0135),
-            );
-            final allVisibleSilent = !anyVisibleSpeaking &&
-                visibleFaces.every(
-                  (v) => v.silentFrames >= 2 || v.recentActivity < 0.0115,
-                );
-            final silVoiceMatches = subjectTrack.currentVoiceMatchBonus >= 0.38 &&
-                !visibleFaces.any((v) => v.speakingFrames >= 2);
-
-            if (audioFrame.isVoicedSpeech &&
-                (allVisibleSilent || silVoiceMatches)) {
-              subjectTrack.silhouetteActivity = 0.078;
-              subjectTrack.lastSpokeSec = timeSec;
-              subjectTrack.silentFrames = 0;
-              subjectTrack.speakingHitCount++;
-              isSilSpeaking = true;
-              if (audioFrame.voiceClusterId >= 0 && allVisibleSilent) {
-                final cId = audioFrame.voiceClusterId;
-                final nextAff =
-                    min(10.0, (silhouetteVoiceAffinity[cId] ?? 0.0) + 0.35);
-                silhouetteVoiceAffinity[cId] = nextAff;
-                subjectTrack.voiceClusterAffinity[cId] = nextAff;
-              }
-            } else {
-              subjectTrack.silhouetteActivity = 0.005;
-              subjectTrack.silentFrames++;
-              isSilSpeaking = false;
-            }
-          }
 
           _updateTrack(
             subjectTrack,
@@ -1617,117 +1678,72 @@ class FaceDetectionService {
               normY: subject.normY,
               normW: subject.normW,
               normH: subject.normH,
-              isSpeaking: isSilSpeaking,
+              isSpeaking: visibleFacesCount == 0 && audioFrame.isVoicedSpeech,
               speakerId: subjectTrack.id,
             ),
           );
           present.add(subjectTrack);
-        } else if (present.isEmpty) {
-          final stale = lastFaceSeenSec == null ||
-              timeSec - lastFaceSeenSec > emptyFrameCenterResetSec;
-          if (cut || stale) {
-            lastX = 0.5;
-            lastY = 0.45;
-          }
+          frameCands.add(
+            _FrameCandidateObs(
+              track: subjectTrack,
+              normX: subject.normX,
+              normY: subject.normY,
+              normW: subject.normW,
+              normH: subject.normH,
+              isSilhouette: true,
+              rawVisualDelta: 0.0,
+              effectiveLipDelta: 0.0,
+              lipOpen: 0.0,
+              avSyncScore: 0.5,
+              silMotion: motionActivity,
+            ),
+          );
         }
 
         if (grid != null) prevGridBytes = grid;
         if (mouthGrid != null) prevMouthGridBytes = mouthGrid;
 
-        final prevSpeaker = currentSpeaker;
-        currentSpeaker = _selectSpeaker(
-          present,
-          currentSpeaker,
-          nowSec: timeSec,
-          audio: audioFrame,
-        );
-        final switchedSpeaker = prevSpeaker != null &&
-            currentSpeaker != null &&
-            !identical(prevSpeaker, currentSpeaker) &&
-            ((currentSpeaker.normX - prevSpeaker.normX).abs() >= 0.10 ||
-                (currentSpeaker.normY - prevSpeaker.normY).abs() >= 0.10);
-
-        if (currentSpeaker != null && present.contains(currentSpeaker)) {
-          lastX = currentSpeaker.normX;
-          lastY = currentSpeaker.normY;
-          lastW = currentSpeaker.normW;
-          lastH = currentSpeaker.normH;
-
-          final confirmedNow = (!currentSpeaker.isSilhouette &&
-                  (currentSpeaker.speakingFrames >= 1 &&
-                          currentSpeaker.recentActivity >= 0.013 ||
-                      currentSpeaker.currentVoiceMatchBonus >= 0.35)) ||
-              (currentSpeaker.isSilhouette &&
-                  currentSpeaker.silhouetteActivity >= 0.045);
-          if (!sceneSpeakerConfirmed && confirmedNow) {
-            sceneSpeakerConfirmed = true;
-            if (activePoints.length > sceneStartPointIdx &&
-                (timeSec - activePoints[sceneStartPointIdx].timeSec) <= 2.5) {
-              for (var k = sceneStartPointIdx; k < activePoints.length; k++) {
-                final tK = activePoints[k].timeSec;
-                var bx = currentSpeaker.normX;
-                var by = currentSpeaker.normY;
-                var bw = currentSpeaker.normW;
-                var bh = currentSpeaker.normH;
-                var bestDt = double.infinity;
-                for (final pt in currentSpeaker.points) {
-                  final dt = (pt.timeSec - tK).abs();
-                  if (dt < bestDt && dt <= 2.6) {
-                    bestDt = dt;
-                    bx = pt.normX;
-                    by = pt.normY;
-                    bw = pt.normW;
-                    bh = pt.normH;
-                  }
-                }
-                activePoints[k] = FaceTrackPoint(
-                  timeSec: tK,
-                  normX: bx,
-                  normY: by,
-                  normW: bw,
-                  normH: bh,
-                  isSpeaking: true,
-                  speakerId: currentSpeaker.id,
-                  isCut: activePoints[k].isCut,
-                );
-              }
-            }
-          }
-        }
-
-        activePoints.add(
-          FaceTrackPoint(
+        observations.add(
+          _FrameObservation(
+            frameIndex: i,
             timeSec: timeSec,
-            normX: lastX,
-            normY: lastY,
-            normW: lastW,
-            normH: lastH,
-            isSpeaking: currentSpeaker != null &&
-                (currentSpeaker.speakingFrames >= 1 ||
-                    currentSpeaker.currentVoiceMatchBonus >= 0.30 ||
-                    (currentSpeaker.isSilhouette &&
-                        currentSpeaker.silhouetteActivity >= 0.045)),
-            speakerId: currentSpeaker?.id,
-            isCut: (cut || switchedSpeaker) && activePoints.isNotEmpty,
+            shotIndex: currentShotIndex,
+            isCut: cut,
+            audio: audioFrame,
+            candidates: frameCands,
           ),
         );
 
         if (i % 6 == 0 || i == frames.length - 1) {
           onProgress?.call(
-            0.16 + 0.78 * ((i + 1) / frames.length),
-            '👄 المرحلة 3/3: تحليل الشفاه وربط الصوت بالمتكلم (${i + 1}/${frames.length})...',
+            0.16 + 0.72 * ((i + 1) / frames.length),
+            '👄 المرحلة 3/3: مسح الشفاه والبصمة الصوتية (${i + 1}/${frames.length})...',
           );
         }
       }
 
       if ((facesDetectedCount == 0 && silhouetteHits == 0) ||
-          activePoints.isEmpty) {
+          observations.isEmpty) {
         AppLogger().i(
           'FaceTrack: no faces and no foreground subject in '
           '${frames.length} frames',
         );
         return null;
       }
+
+      onProgress?.call(
+        0.92,
+        '🎯 تثبيت الكاميرا الحتمي لكل جملة ولقطة بدون عشوائية...',
+      );
+
+      // Pass 1.5: Global Whole-Video Voice Enrollment & Cross-Shot Identity Linking
+      _enrollGlobalVoiceAndAppearance(observations, tracks);
+
+      // Pass 2: Deterministic Shot & Speech-Turn Trajectory Resolution
+      final activePoints = _resolveTwoPassDeterministicTrajectory(
+        observations,
+        tracks,
+      );
 
       final keyframes = buildKeyframes(
         activePoints,
@@ -1871,47 +1887,563 @@ class FaceDetectionService {
     return out;
   }
 
-  static void _updateVoiceClusterBindings(
-    List<_SpeakerTrack> present,
-    AudioFrameFeatures audio,
+  // ---------------------------------------------------------------------------
+  // Pass 1.5 & Pass 2: Whole-Video Voice Enrollment & Deterministic Turn Engine
+  // ---------------------------------------------------------------------------
+
+  static void _enrollGlobalVoiceAndAppearance(
+    List<_FrameObservation> observations,
+    Map<int, _SpeakerTrack> tracks,
   ) {
-    if (!audio.isVoicedSpeech || audio.voiceClusterId < 0 || present.isEmpty) {
-      return;
-    }
-    final clusterId = audio.voiceClusterId;
+    final visibleTracks = tracks.values
+        .where((t) => !t.isSilhouette && t.points.isNotEmpty)
+        .toList();
+    final silTracks = tracks.values.where((t) => t.isSilhouette).toList();
 
-    _SpeakerTrack? topVisualSpeaker;
-    var bestVisual = 0.0;
-    var secondVisual = 0.0;
-
-    for (final track in present) {
-      if (track.isSilhouette || track.rawVisualDeltas.isEmpty) continue;
-      final latestDelta = track.rawVisualDeltas.last;
-      final weighted = latestDelta * (0.65 + 0.35 * track.avSyncScore);
-      if (weighted > bestVisual) {
-        secondVisual = bestVisual;
-        bestVisual = weighted;
-        topVisualSpeaker = track;
-      } else if (weighted > secondVisual) {
-        secondVisual = weighted;
+    double avgXOf(_SpeakerTrack t) {
+      if (t.points.isEmpty) return t.normX;
+      var s = 0.0;
+      for (final p in t.points) {
+        s += p.normX;
       }
+      return s / t.points.length;
     }
 
-    if (topVisualSpeaker != null &&
-        bestVisual >= 0.0135 &&
-        topVisualSpeaker.avSyncScore >= 0.42 &&
-        (present.length == 1 || bestVisual >= secondVisual * 1.45 + 0.004)) {
-      final prev = topVisualSpeaker.voiceClusterAffinity[clusterId] ?? 0.0;
-      topVisualSpeaker.voiceClusterAffinity[clusterId] = min(10.0, prev + 0.85);
-      for (final other in present) {
-        if (!identical(other, topVisualSpeaker)) {
-          final oPrev = other.voiceClusterAffinity[clusterId] ?? 0.0;
-          if (oPrev > 0) {
-            other.voiceClusterAffinity[clusterId] = max(0.0, oPrev - 0.25);
+    // Group visible tracks across shots by head/torso appearance similarity or
+    // close horizontal slot so a person moving from a solo shot (x=0.38) to a
+    // split-screen panel (x=0.17) carries their enrolled voice print.
+    final trackToGroup = <int, int>{};
+    final groups = <List<_SpeakerTrack>>[];
+    for (final track in visibleTracks) {
+      final tx = avgXOf(track);
+      var matchedGroup = -1;
+      var bestSim = 0.0;
+      for (var g = 0; g < groups.length; g++) {
+        for (final member in groups[g]) {
+          final torsoSim = _signatureSimilarity(
+            member.torsoSignature,
+            track.torsoSignature,
+          );
+          final headSim = _signatureSimilarity(
+            member.headSignature,
+            track.headSignature,
+          );
+          final appSim = 0.62 * torsoSim + 0.38 * headSim;
+          final sameSlot = (tx - avgXOf(member)).abs() < 0.14;
+          if ((appSim >= 0.87 || (sameSlot && appSim >= 0.72)) &&
+              appSim > bestSim) {
+            bestSim = appSim;
+            matchedGroup = g;
           }
         }
       }
+      if (matchedGroup >= 0) {
+        groups[matchedGroup].add(track);
+        trackToGroup[track.id] = matchedGroup;
+      } else {
+        final newG = groups.length;
+        groups.add([track]);
+        trackToGroup[track.id] = newG;
+      }
     }
+
+    final groupAffinities = <int, Map<int, double>>{
+      for (var g = 0; g < groups.length; g++) g: <int, double>{},
+    };
+    final silVoicePool = <int, double>{};
+
+    // Enroll voices from:
+    // 1) Solo shots (1 candidate on screen while speech is active)
+    // 2) Clear multi-person anchor moments (1 face clearly articulating while
+    //    others have still mouths, OR all visible faces silent while a
+    //    silhouette is on screen).
+    for (final obs in observations) {
+      if (!obs.audio.isVoicedSpeech ||
+          obs.audio.voiceClusterId < 0 ||
+          obs.candidates.isEmpty) {
+        continue;
+      }
+      final cId = obs.audio.voiceClusterId;
+
+      if (obs.candidates.length == 1) {
+        final sole = obs.candidates.first;
+        if (sole.isSilhouette) {
+          silVoicePool[cId] = min(14.0, (silVoicePool[cId] ?? 0.0) + 1.10);
+        } else {
+          final gId = trackToGroup[sole.track.id];
+          if (gId != null &&
+              (sole.effectiveLipDelta >= 0.0085 ||
+                  sole.rawVisualDelta >= 0.0095 ||
+                  obs.audio.speechEnergy >= 0.26)) {
+            final map = groupAffinities[gId]!;
+            map[cId] = min(14.0, (map[cId] ?? 0.0) + 1.05);
+          }
+        }
+        continue;
+      }
+
+      final visCands =
+          obs.candidates.where((c) => !c.isSilhouette).toList();
+      final hasSil = obs.candidates.any((c) => c.isSilhouette);
+
+      _FrameCandidateObs? topVis;
+      var bestVal = 0.0;
+      var secondVal = 0.0;
+      for (final c in visCands) {
+        final v = c.effectiveLipDelta * (0.65 + 0.35 * c.avSyncScore);
+        if (v > bestVal) {
+          secondVal = bestVal;
+          bestVal = v;
+          topVis = c;
+        } else if (v > secondVal) {
+          secondVal = v;
+        }
+      }
+
+      if (topVis != null &&
+          bestVal >= 0.0125 &&
+          topVis.avSyncScore >= 0.40 &&
+          (visCands.length == 1 || bestVal >= secondVal * 1.40 + 0.003)) {
+        final gId = trackToGroup[topVis.track.id];
+        if (gId != null) {
+          final map = groupAffinities[gId]!;
+          map[cId] = min(14.0, (map[cId] ?? 0.0) + 0.85);
+          for (final other in visCands) {
+            if (!identical(other.track, topVis.track)) {
+              final oG = trackToGroup[other.track.id];
+              if (oG != null && oG != gId) {
+                final oMap = groupAffinities[oG]!;
+                final prev = oMap[cId] ?? 0.0;
+                if (prev > 0) oMap[cId] = max(0.0, prev - 0.20);
+              }
+            }
+          }
+        }
+      } else if (hasSil &&
+          visCands.isNotEmpty &&
+          visCands.every(
+            (v) => v.rawVisualDelta < 0.0090 && v.effectiveLipDelta < 0.0095,
+          )) {
+        silVoicePool[cId] = min(14.0, (silVoicePool[cId] ?? 0.0) + 0.55);
+      }
+    }
+
+    for (var g = 0; g < groups.length; g++) {
+      final aff = groupAffinities[g]!;
+      for (final t in groups[g]) {
+        t.voiceClusterAffinity
+          ..clear()
+          ..addAll(aff);
+      }
+    }
+    for (final st in silTracks) {
+      st.voiceClusterAffinity
+        ..clear()
+        ..addAll(silVoicePool);
+    }
+  }
+
+  static List<FaceTrackPoint> _resolveTwoPassDeterministicTrajectory(
+    List<_FrameObservation> observations,
+    Map<int, _SpeakerTrack> tracks,
+  ) {
+    if (observations.isEmpty) return const [];
+
+    // Reset speakingHitCount so Pass 2 records the exact verified speaking
+    // frames for each track and profile.
+    for (final t in tracks.values) {
+      t.speakingHitCount = 0;
+    }
+
+    // Partition observations by shotIndex.
+    final shotRanges = <(int, int)>[];
+    var sStart = 0;
+    for (var i = 1; i < observations.length; i++) {
+      if (observations[i].shotIndex != observations[i - 1].shotIndex ||
+          observations[i].isCut) {
+        shotRanges.add((sStart, i));
+        sStart = i;
+      }
+    }
+    shotRanges.add((sStart, observations.length));
+
+    final activePoints = <FaceTrackPoint>[];
+    var lastX = 0.5;
+    var lastY = 0.45;
+    var lastW = 0.16;
+    var lastH = 0.24;
+    double? lastSeenSec;
+
+    ({double x, double y, double w, double h}) coordsForTrackInShot(
+      _SpeakerTrack target,
+      List<_FrameObservation> shotObs,
+      int localIdx,
+    ) {
+      final direct = shotObs[localIdx].candidates;
+      for (final c in direct) {
+        if (identical(c.track, target)) {
+          return (x: c.normX, y: c.normY, w: c.normW, h: c.normH);
+        }
+      }
+      var bestDist = 999999;
+      _FrameCandidateObs? nearest;
+      for (var k = 0; k < shotObs.length; k++) {
+        for (final c in shotObs[k].candidates) {
+          if (identical(c.track, target)) {
+            final d = (k - localIdx).abs();
+            if (d < bestDist) {
+              bestDist = d;
+              nearest = c;
+            }
+          }
+        }
+      }
+      if (nearest != null) {
+        return (
+          x: nearest.normX,
+          y: nearest.normY,
+          w: nearest.normW,
+          h: nearest.normH,
+        );
+      }
+      return (
+        x: target.normX,
+        y: target.normY,
+        w: target.normW,
+        h: target.normH,
+      );
+    }
+
+    for (var shIdx = 0; shIdx < shotRanges.length; shIdx++) {
+      final (startIdx, endIdx) = shotRanges[shIdx];
+      final shotObs = observations.sublist(startIdx, endIdx);
+      if (shotObs.isEmpty) continue;
+
+      final trackCounts = <_SpeakerTrack, int>{};
+      for (final obs in shotObs) {
+        for (final c in obs.candidates) {
+          trackCounts[c.track] = (trackCounts[c.track] ?? 0) + 1;
+        }
+      }
+      final minPresence = shotObs.length >= 4 ? 2 : 1;
+      final shotTracks = trackCounts.entries
+          .where((e) => e.value >= minPresence)
+          .map((e) => e.key)
+          .toList();
+
+      // Case 0: Empty shot (no face or silhouette detected).
+      if (shotTracks.isEmpty) {
+        for (var k = 0; k < shotObs.length; k++) {
+          final obs = shotObs[k];
+          final stale = lastSeenSec == null ||
+              obs.timeSec - lastSeenSec > emptyFrameCenterResetSec;
+          if ((shIdx > 0 && k == 0) || stale) {
+            lastX = 0.5;
+            lastY = 0.45;
+          }
+          activePoints.add(
+            FaceTrackPoint(
+              timeSec: obs.timeSec,
+              normX: lastX,
+              normY: lastY,
+              normW: lastW,
+              normH: lastH,
+              isSpeaking: false,
+              isCut: shIdx > 0 && k == 0 && activePoints.isNotEmpty,
+            ),
+          );
+        }
+        continue;
+      }
+
+      // Case 1: Single-person shot (1 visible face OR 1 black silhouette).
+      // Lock 100% of the shot onto that person from frame 0 of the shot.
+      if (shotTracks.length == 1) {
+        final sole = shotTracks.first;
+        for (var k = 0; k < shotObs.length; k++) {
+          final obs = shotObs[k];
+          final pos = coordsForTrackInShot(sole, shotObs, k);
+          lastX = pos.x;
+          lastY = pos.y;
+          lastW = pos.w;
+          lastH = pos.h;
+          lastSeenSec = obs.timeSec;
+          final speaking = obs.audio.isVoicedSpeech;
+          if (speaking) sole.speakingHitCount++;
+          activePoints.add(
+            FaceTrackPoint(
+              timeSec: obs.timeSec,
+              normX: lastX,
+              normY: lastY,
+              normW: lastW,
+              normH: lastH,
+              isSpeaking: speaking,
+              speakerId: sole.id,
+              isCut: shIdx > 0 && k == 0 && activePoints.isNotEmpty,
+            ),
+          );
+        }
+        continue;
+      }
+
+      // Case 2: Multi-person shot (2 or 3 people on screen, e.g. split screen
+      // or podcast 2-shot). Resolve deterministically using:
+      // - Per-frame Lip Articulation + Voice Print Affinity + Silhouette Elimination
+      // - 5-frame (1.0s) centered sliding-window evidence integration
+      // - Shot-start lookahead backfill (Scenario 6 & Scenario 1)
+      // - Silence Freeze (Scenario 5)
+      // - Minimum 1.0s floor-takeover hysteresis to reject brief interjections (Scenario 2)
+      final nFrames = shotObs.length;
+
+      // Smooth isolated 1-frame silence dips inside continuous speech.
+      final voicedFlags = List<bool>.generate(
+        nFrames,
+        (k) => shotObs[k].audio.isVoicedSpeech,
+      );
+      for (var k = 1; k + 1 < nFrames; k++) {
+        if (!voicedFlags[k] && voicedFlags[k - 1] && voicedFlags[k + 1]) {
+          voicedFlags[k] = true;
+        }
+      }
+
+      final rawEvidence = <_SpeakerTrack, List<double>>{
+        for (final t in shotTracks) t: List<double>.filled(nFrames, 0.0),
+      };
+
+      for (var k = 0; k < nFrames; k++) {
+        final obs = shotObs[k];
+        if (!voicedFlags[k]) continue;
+
+        final visCands =
+            obs.candidates.where((c) => !c.isSilhouette).toList();
+        var maxVisRawDelta = 0.0;
+        var maxVisEffDelta = 0.0;
+        for (final vc in visCands) {
+          if (vc.rawVisualDelta > maxVisRawDelta) {
+            maxVisRawDelta = vc.rawVisualDelta;
+          }
+          if (vc.effectiveLipDelta > maxVisEffDelta) {
+            maxVisEffDelta = vc.effectiveLipDelta;
+          }
+        }
+        final allVisibleSilentNow =
+            maxVisRawDelta < 0.0108 && maxVisEffDelta < 0.0115;
+
+        for (final t in shotTracks) {
+          _FrameCandidateObs? cand;
+          for (final c in obs.candidates) {
+            if (identical(c.track, t)) {
+              cand = c;
+              break;
+            }
+          }
+
+          if (t.isSilhouette) {
+            final silVoiceMatch =
+                t.voiceAffinityForCluster(obs.audio.voiceClusterId);
+            if (allVisibleSilentNow) {
+              // Elimination Rule: speech is present while all visible mouths
+              // are still/closed -> the black-masked silhouette is speaking.
+              rawEvidence[t]![k] = 0.62 + silVoiceMatch * 0.45;
+            } else if (silVoiceMatch >= 0.48 && maxVisEffDelta < 0.0140) {
+              rawEvidence[t]![k] = 0.54 + silVoiceMatch * 0.42;
+            } else {
+              rawEvidence[t]![k] = 0.01;
+            }
+          } else {
+            final voiceMatch =
+                t.voiceAffinityForCluster(obs.audio.voiceClusterId);
+            if (cand != null) {
+              final lipScore = cand.effectiveLipDelta * 24.0 +
+                  (cand.rawVisualDelta >= 0.0120 ? 0.25 : 0.0) +
+                  (cand.rawVisualDelta >= 0.0180 ? 0.18 : 0.0);
+              final gatedVoice = cand.rawVisualDelta >= 0.0080
+                  ? voiceMatch * 0.48
+                  : voiceMatch * 0.16;
+              rawEvidence[t]![k] =
+                  lipScore * (0.72 + 0.28 * cand.avSyncScore) + gatedVoice;
+            } else {
+              // Coasted via voice continuity if momentarily unseen.
+              rawEvidence[t]![k] = voiceMatch * 0.25;
+            }
+          }
+        }
+      }
+
+      // Compute 5-frame (1.0s) centered sliding-window evidence + lip-open
+      // oscillation cadence bonus for each track across the shot.
+      final winEvidence = <_SpeakerTrack, List<double>>{
+        for (final t in shotTracks) t: List<double>.filled(nFrames, 0.0),
+      };
+      for (final t in shotTracks) {
+        final rawList = rawEvidence[t]!;
+        for (var k = 0; k < nFrames; k++) {
+          final w0 = max(0, k - 2);
+          final w1 = min(nFrames - 1, k + 2);
+          var sum = 0.0;
+          var voicedCount = 0;
+          final opens = <double>[];
+          for (var j = w0; j <= w1; j++) {
+            if (voicedFlags[j]) {
+              sum += rawList[j];
+              voicedCount++;
+            }
+            if (!t.isSilhouette) {
+              for (final c in shotObs[j].candidates) {
+                if (identical(c.track, t)) {
+                  opens.add(c.lipOpen);
+                  break;
+                }
+              }
+            }
+          }
+          if (voicedCount == 0) {
+            winEvidence[t]![k] = 0.0;
+            continue;
+          }
+          var cadenceBonus = 0.0;
+          if (opens.length >= 3) {
+            var meanO = 0.0;
+            for (final o in opens) {
+              meanO += o;
+            }
+            meanO /= opens.length;
+            var sq = 0.0;
+            for (final o in opens) {
+              sq += (o - meanO) * (o - meanO);
+            }
+            final stdO = sqrt(sq / opens.length);
+            cadenceBonus = (stdO / 0.020).clamp(0.0, 0.22);
+          }
+          winEvidence[t]![k] = (sum / voicedCount) + cadenceBonus;
+        }
+      }
+
+      _SpeakerTrack bestTrackAtFrame(int k) {
+        var best = shotTracks.first;
+        var bestVal = -1.0;
+        for (final t in shotTracks) {
+          final v = winEvidence[t]![k];
+          if (v > bestVal) {
+            bestVal = v;
+            best = t;
+          }
+        }
+        return best;
+      }
+
+      // Shot-Start Lookahead (Scenario 6 & Scenario 1): find the speaker of
+      // the first voiced turn in this shot and lock onto them from frame 0!
+      _SpeakerTrack? currentLocked;
+      final firstTurnTotals = <_SpeakerTrack, double>{
+        for (final t in shotTracks) t: 0.0,
+      };
+      var firstVoicedSeen = 0;
+      for (var k = 0; k < nFrames && firstVoicedSeen < 6; k++) {
+        if (!voicedFlags[k]) {
+          if (firstVoicedSeen >= 2) break;
+          continue;
+        }
+        firstVoicedSeen++;
+        for (final t in shotTracks) {
+          firstTurnTotals[t] = (firstTurnTotals[t] ?? 0.0) + winEvidence[t]![k];
+        }
+      }
+      if (firstVoicedSeen > 0) {
+        var bestScore = -1.0;
+        for (final t in shotTracks) {
+          final sc = firstTurnTotals[t] ?? 0.0;
+          if (sc > bestScore) {
+            bestScore = sc;
+            currentLocked = t;
+          }
+        }
+      }
+      currentLocked ??= shotTracks.first;
+
+      final assignedWinners = List<_SpeakerTrack>.filled(nFrames, currentLocked);
+      var framesOnCurrent = 0;
+
+      for (var k = 0; k < nFrames; k++) {
+        if (!voicedFlags[k]) {
+          // Scenario 5: Silence Freeze — never switch speakers during silence.
+          assignedWinners[k] = currentLocked!;
+          framesOnCurrent++;
+          continue;
+        }
+
+        final candidateLeader = bestTrackAtFrame(k);
+        if (!identical(candidateLeader, currentLocked)) {
+          final currScore = winEvidence[currentLocked]![k];
+          final candScore = winEvidence[candidateLeader]![k];
+
+          // Look ahead up to 6 frames (1.2s) to verify this is a real turn
+          // takeover and not a 1-word backchannel interruption (Scenario 2).
+          var takeoverFrames = 0;
+          var voicedLookahead = 0;
+          final lookEnd = min(nFrames, k + 6);
+          for (var j = k; j < lookEnd; j++) {
+            if (!voicedFlags[j]) continue;
+            voicedLookahead++;
+            final leaderJ = bestTrackAtFrame(j);
+            if (identical(leaderJ, candidateLeader) &&
+                winEvidence[candidateLeader]![j] >
+                    winEvidence[currentLocked]![j] * 1.15 + 0.04) {
+              takeoverFrames++;
+            }
+          }
+
+          final requiredTakeover = min(4, max(2, voicedLookahead - 1));
+          if (framesOnCurrent >= 4 &&
+              candScore >= 0.22 &&
+              candScore > currScore * 1.18 + 0.05 &&
+              takeoverFrames >= requiredTakeover) {
+            currentLocked = candidateLeader;
+            framesOnCurrent = 1;
+          } else {
+            framesOnCurrent++;
+          }
+        } else {
+          framesOnCurrent++;
+        }
+        assignedWinners[k] = currentLocked!;
+      }
+
+      // Emit activePoints for this multi-person shot with instant cuts on
+      // shot entry and on every verified speaker turn switch.
+      for (var k = 0; k < nFrames; k++) {
+        final obs = shotObs[k];
+        final winner = assignedWinners[k];
+        final pos = coordsForTrackInShot(winner, shotObs, k);
+        final prevWinner = k > 0 ? assignedWinners[k - 1] : null;
+        final switchedInShot = prevWinner != null && !identical(prevWinner, winner);
+
+        lastX = pos.x;
+        lastY = pos.y;
+        lastW = pos.w;
+        lastH = pos.h;
+        lastSeenSec = obs.timeSec;
+
+        final speakingNow = voicedFlags[k];
+        if (speakingNow) winner.speakingHitCount++;
+
+        activePoints.add(
+          FaceTrackPoint(
+            timeSec: obs.timeSec,
+            normX: lastX,
+            normY: lastY,
+            normW: lastW,
+            normH: lastH,
+            isSpeaking: speakingNow,
+            speakerId: winner.id,
+            isCut: ((shIdx > 0 && k == 0) || switchedInShot) &&
+                activePoints.isNotEmpty,
+          ),
+        );
+      }
+    }
+
+    return activePoints;
   }
 
   // ---------------------------------------------------------------------------
@@ -3145,81 +3677,6 @@ class FaceDetectionService {
     final union = track.normW * track.normH + (nx1 - nx0) * (ny1 - ny0) -
         intersection;
     return union > 0 ? intersection / union : 0;
-  }
-
-  static _SpeakerTrack? _selectSpeaker(
-    List<_SpeakerTrack> present,
-    _SpeakerTrack? current, {
-    required double nowSec,
-    required AudioFrameFeatures audio,
-  }) {
-    if (present.isEmpty) return null;
-    if (present.length == 1) {
-      final only = present.first;
-      only.lockStartSec ??= nowSec;
-      return only;
-    }
-
-    if (current != null && present.contains(current)) {
-      current.lockStartSec ??= nowSec;
-      if (!audio.isVoicedSpeech) {
-        return current;
-      }
-
-      final lockedFor = nowSec - (current.lockStartSec ?? nowSec);
-      final sinceCurrentSpoke = nowSec - current.lastSpokeSec;
-      var best = current;
-      for (final candidate in present) {
-        if (candidate.score > best.score) best = candidate;
-      }
-      if (!identical(best, current)) {
-        final bestHasVoiceLock = best.currentVoiceMatchBonus >= 0.45 &&
-            best.currentVoiceMatchBonus > current.currentVoiceMatchBonus + 0.25;
-        final bestConfirmed = (!best.isSilhouette &&
-                ((best.speakingFrames >= 2 && best.recentActivity >= 0.014) ||
-                    (bestHasVoiceLock && best.speakingFrames >= 1))) ||
-            (best.isSilhouette && best.silhouetteActivity >= 0.045);
-
-        final currentNeverSpoke = (!current.isSilhouette &&
-                current.lastSpokeSec < 0 &&
-                current.speakingFrames == 0) ||
-            (current.isSilhouette && current.silhouetteActivity < 0.02);
-        final bestStartedSpeaking = (!best.isSilhouette &&
-                (best.speakingFrames >= 1 && best.recentActivity >= 0.013 ||
-                    bestHasVoiceLock)) ||
-            (best.isSilhouette && best.silhouetteActivity >= 0.045);
-
-        if (currentNeverSpoke && bestStartedSpeaking) {
-          best.lockStartSec = nowSec;
-          return best;
-        }
-        final currentPaused = sinceCurrentSpoke >= 0.95 ||
-            current.silentFrames >= 4 ||
-            (current.isSilhouette && current.silhouetteActivity < 0.02);
-        if (bestConfirmed &&
-            ((currentPaused && best.score > current.score * 1.18 + 0.010) ||
-                (bestHasVoiceLock &&
-                    lockedFor >= 0.75 &&
-                    best.score > current.score * 1.20) ||
-                (best.isSilhouette &&
-                    best.silhouetteActivity >= 0.045 &&
-                    lockedFor >= 0.75 &&
-                    current.speakingFrames == 0) ||
-                (lockedFor >= speakerLockSeconds &&
-                    best.score > current.score * 1.40 + 0.015))) {
-          best.lockStartSec = nowSec;
-          return best;
-        }
-      }
-      return current;
-    }
-
-    _SpeakerTrack? best;
-    for (final candidate in present) {
-      if (best == null || candidate.score > best.score) best = candidate;
-    }
-    best?.lockStartSec = nowSec;
-    return best;
   }
 
   static const int maxProfiles = 4;
