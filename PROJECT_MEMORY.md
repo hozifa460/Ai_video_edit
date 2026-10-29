@@ -580,6 +580,16 @@ Android يستخدم Java/Kotlin target 17، SDK versions موروثة من Flut
 - Limitations: host-side only - no device run, no real media/ML Kit/FFmpeg; silhouette thin-stripe stripping and face-box masking verified on synthetic grids only; mouth-region delta and passersby penalty need on-device validation.
 - Status: Implemented - awaiting review.
 
+### 2026-10-28 (7) - OpenCode - Masked-speaker tracking in wide shots and right-edge close-ups
+
+- Scope: lib/core/services/face_detection_service.dart, test/auto_reframe_test.dart. Two remaining bugs from frame-by-frame review.
+- Bug 1 (silent visible faces beat masked speaker in wide 3-person shots): silhouette region widened to full horizontal range (0.0..1.0) so right-edge heads aren't clipped; silhouetteActivity now compares maxVisibleFaceActivity of visible tracks: if all visible faces are silent (<0.018) the masked speaker gets an activity floor of 0.055, if any visible face is actively speaking (>=0.018) the masked speaker yields (activity capped at 0.005). computeMouthRegionDelta and _updateLipActivity gained noise-floor deadbands (0.0065 for pixel delta; 0.006 for mouth open/width, 0.015 for smile) so H.264 grain and ML Kit jitter on silent faces produce 0.0.
+- Bug 2 (right-edge clipping at t=54s): silhouetteRegionX1 0.98->1.0 (and X0 0.02->0.0); out-of-bounds horizontal neighbors in the 3x3 darkNeighbor count are now treated as dark, so a masked head touching the left/right border is not eroded (darkNeighbors >= 5 still holds).
+- Tests (auto_reframe_test.dart now 53 tests; full suite 411): added noise-floor test (<=1 gray level -> 0.0, >=15 gray levels -> >0.02) and right-border silhouette test (gx=70..79, normX > 0.85). All pass.
+- Checks run: flutter analyze --no-pub = No issues found; flutter test --no-pub = 411 passed.
+- Limitations: host-side only - no device run, no real media/ML Kit/FFmpeg; new deadbands and right-border handling verified on synthetic grids only; on-device validation still needed for multi-speaker scoring and tap/drag feel.
+- Status: Implemented - awaiting review.
+
 ### 2026-10-28 (6) - OpenCode - Scene-cut-aware analysis, expanded exclusion rects, ceiling-pillar stripping, _enforceBudget cut preservation
 
 - Scope: lib/core/services/face_detection_service.dart, test/auto_reframe_test.dart. Four real-world bugs found frame-by-frame against the multi-camera studio video.

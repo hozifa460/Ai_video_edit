@@ -844,6 +844,102 @@ void main() {
       expect(delta, greaterThan(0.0));
     });
 
+    test('computeMouthRegionDelta returns 0.0 for <=1 gray level noise and '
+        '>0.02 for >=15 gray level change', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final prev = Uint8List(w * h * 4);
+      final currNoise = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        prev[i * 4] = 100;
+        prev[i * 4 + 1] = 100;
+        prev[i * 4 + 2] = 100;
+        prev[i * 4 + 3] = 255;
+        currNoise[i * 4] = 101; // +1 gray level noise
+        currNoise[i * 4 + 1] = 101;
+        currNoise[i * 4 + 2] = 101;
+        currNoise[i * 4 + 3] = 255;
+      }
+      // Noise-only diff should be killed by the 0.0065 floor.
+      final noiseDelta = FaceDetectionService.computeMouthRegionDelta(
+        prev,
+        currNoise,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+      expect(noiseDelta, 0.0);
+
+      // >= 15 gray level change in the mouth region -> > 0.02.
+      final currBig = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        currBig[i * 4] = 100;
+        currBig[i * 4 + 1] = 100;
+        currBig[i * 4 + 2] = 100;
+        currBig[i * 4 + 3] = 255;
+      }
+      for (var by = 24; by <= 33; by++) {
+        for (var bx = 30; bx <= 50; bx++) {
+          final o = (by * w + bx) * 4;
+          currBig[o] = 115; // +15
+          currBig[o + 1] = 115;
+          currBig[o + 2] = 115;
+        }
+      }
+      final bigDelta = FaceDetectionService.computeMouthRegionDelta(
+        prev,
+        currBig,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+      expect(bigDelta, greaterThan(0.02));
+    });
+
+    test('detectSilhouetteOrMotionSubject centers on a right-border silhouette '
+        '(gx=70..79) with normX > 0.85', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Dark silhouette touching the right border.
+      for (var gy = 8; gy <= 36; gy++) {
+        for (var gx = 70; gx <= 79; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 8;
+          rgba[o + 1] = 8;
+          rgba[o + 2] = 8;
+        }
+      }
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+      expect(subject, isNotNull);
+      expect(subject!.normX, greaterThan(0.85));
+    });
+
     test('ceiling-connected wall pillar is stripped and normX stays on the '
         'silhouette head', () {
       const w = FaceDetectionService.silhouetteGridWidth;

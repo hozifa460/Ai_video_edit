@@ -555,9 +555,11 @@ class FaceDetectionService {
             subjectTrack.isSilhouette = true;
           }
 
-          // Silhouette activity: head gesture + mask-edge motion + a solo
-          // floor for prominent silhouettes, so a talking masked speaker beats
-          // silent visible faces.
+          // Silhouette activity: in multi-person shots, the masked speaker is
+          // active when all visible faces are silent (maxVisibleFaceActivity <
+          // 0.018) and yields when any visible face is actively speaking
+          // (>= 0.018). Solo shots keep a floor so a talking masked speaker
+          // beats an empty frame.
           double gestureDelta = 0;
           if (!cut && subjectTrack.hits > 0) {
             final dx = subject.normX - subjectTrack.normX;
@@ -566,63 +568,63 @@ class FaceDetectionService {
           }
           double maskEdge = 0;
           if (prevGridBytes != null && !cut && grid != null) {
-            final bx0 = (subject.normX - subject.normW / 2).clamp(0.0, 1.0);
-            final by0 = (subject.normY - subject.normH / 2).clamp(0.0, 1.0);
-            final bx1 = (subject.normX + subject.normW / 2).clamp(0.0, 1.0);
-            final by1 = (subject.normY + subject.normH / 2).clamp(0.0, 1.0);
-            // top-ish band: use the whole bbox for edge sampling.
-            const cols = 6;
-            const rows = 4;
-            var sum = 0.0;
-            var n = 0;
-            for (var r = 0; r < rows; r++) {
-              for (var c = 0; c < cols; c++) {
-                final tx = bx0 + (bx1 - bx0) * (c + 0.5) / cols;
-                final ty = by0 + (by1 - by0) * (r + 0.5) / rows;
-                final gxi = (tx * silhouetteGridWidth).floor().clamp(
-                  0,
-                  silhouetteGridWidth - 1,
-                );
-                final gyi = (ty * silhouetteGridHeight).floor().clamp(
-                  0,
-                  silhouetteGridHeight - 1,
-                );
-                final prevXi = gxi;
-                final prevYi = gyi;
-                final currLuma =
-                    (77 * grid[gyi * silhouetteGridWidth * 4 + gxi * 4] +
-                            150 *
-                                grid[gyi * silhouetteGridWidth * 4 +
-                                    gxi * 4 +
-                                    1] +
-                            29 *
-                                grid[gyi * silhouetteGridWidth * 4 +
-                                    gxi * 4 +
-                                    2]) >>
-                        8;
-                final prevLuma =
-                    (77 *
-                            prevGridBytes[prevYi * silhouetteGridWidth * 4 +
-                                prevXi * 4] +
-                        150 *
-                            prevGridBytes[prevYi * silhouetteGridWidth * 4 +
-                                prevXi * 4 +
-                                1] +
-                        29 *
-                            prevGridBytes[prevYi * silhouetteGridWidth * 4 +
-                                prevXi * 4 +
-                                2]) >>
-                    8;
-                sum += (currLuma - prevLuma).abs();
-                n++;
-              }
-            }
-            if (n > 0) maskEdge = (sum / n) / 255.0 * 2.0;
+            final bx0 = (subject.normX - subject.normW * 0.65).clamp(0.0, 1.0);
+            final by0 = (subject.normY - subject.normH * 0.55).clamp(0.0, 1.0);
+            final bx1 = (subject.normX + subject.normW * 0.65).clamp(0.0, 1.0);
+            final by1 = (subject.normY + subject.normH * 0.65).clamp(0.0, 1.0);
+            maskEdge = computeMouthRegionDelta(
+              prevGridBytes,
+              grid,
+              silhouetteGridWidth,
+              silhouetteGridHeight,
+              nx0: bx0,
+              ny0: by0,
+              nx1: bx1,
+              ny1: by1,
+              prevNx0: bx0,
+              prevNy0: by0,
+              prevNx1: bx1,
+              prevNy1: by1,
+            );
           }
           final prominent = subject.normW * subject.normH >= 0.08;
-          var activity = max(gestureDelta, maskEdge);
-          if (prominent) activity = max(activity, 0.045);
-          subjectTrack.silhouetteActivity = activity;
+          var activity = max(gestureDelta, maskEdge * 3.2);
+          if (faces.isEmpty) {
+            if (prominent) activity = max(activity, 0.045);
+          } else {
+            var maxVisibleFaceActivity = 0.0;
+            for (final t in tracks.values) {
+              if (!t.isSilhouette && t.lastSeenSec == timeSec) {
+                if (t.recentActivity > maxVisibleFaceActivity) {
+                  maxVisibleFaceActivity = t.recentActivity;
+                }
+              }
+            }
+            if (maxVisibleFaceActivity < 0.018) {
+              // Visible faces are silent -> the masked speaker is the one talking
+              activity = max(activity, 0.055);
+            } else {
+              // A visible face is actively moving its lips -> yield to visible speaker
+              activity = min(activity, 0.005);
+            }
+          }
+          if (prevGridBytes != null && !cut && grid != null) {
+            subjectTrack.silhouetteActivity =
+                subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
+          } else {
+            var maxVisibleFaceActivity = 0.0;
+            for (final t in tracks.values) {
+              if (!t.isSilhouette && t.lastSeenSec == timeSec) {
+                if (t.recentActivity > maxVisibleFaceActivity) {
+                  maxVisibleFaceActivity = t.recentActivity;
+                }
+              }
+            }
+            subjectTrack.silhouetteActivity =
+                (faces.isEmpty || maxVisibleFaceActivity < 0.018)
+                    ? 0.055
+                    : 0.008;
+          }
 
           _updateTrack(
             subjectTrack,
@@ -762,8 +764,8 @@ class FaceDetectionService {
   /// letterbox bars, lower-third graphics and playback chrome). Widened so
   /// speakers near the left/right edges of wide or close shots are not
   /// clipped.
-  static const double silhouetteRegionX0 = 0.02;
-  static const double silhouetteRegionX1 = 0.98;
+  static const double silhouetteRegionX0 = 0.0;
+  static const double silhouetteRegionX1 = 1.0;
   static const double silhouetteRegionY0 = 0.12;
   static const double silhouetteRegionY1 = 0.92;
 
@@ -948,7 +950,10 @@ class FaceDetectionService {
         for (var ny = gy - 1; ny <= gy + 1; ny++) {
           if (ny < 0 || ny >= height) continue;
           for (var nx = gx - 1; nx <= gx + 1; nx++) {
-            if (nx < 0 || nx >= width) continue;
+            if (nx < 0 || nx >= width) {
+              darkNeighbors++;
+              continue;
+            }
             if (luma[ny * width + nx] <= silhouetteNeighborhoodLuma) {
               darkNeighbors++;
             }
@@ -1295,20 +1300,29 @@ class FaceDetectionService {
     var delta = 0.0;
     if (open != null) {
       final previous = track.lastOpen;
-      if (hasPrev && previous != null) delta += (open - previous).abs() * 4.5;
+      if (hasPrev && previous != null) {
+        final dOpen = max(0.0, (open - previous).abs() - 0.006);
+        delta += dOpen * 4.5;
+      }
       track.lastOpen = open;
       if (!hasPrev) track.lastOpen = open; // reset anchor, no diff
     }
     if (width != null) {
       final previous = track.lastWidth;
-      if (hasPrev && previous != null) delta += (width - previous).abs() * 2.5;
+      if (hasPrev && previous != null) {
+        final dWidth = max(0.0, (width - previous).abs() - 0.006);
+        delta += dWidth * 2.5;
+      }
       track.lastWidth = width;
     }
     // Classification articulation: speaking moves mouth corners continuously.
     final smile = face.smilingProbability;
     if (smile != null) {
       final prevSmile = track.lastSmile;
-      if (hasPrev && prevSmile != null) delta += (smile - prevSmile).abs() * 1.8;
+      if (hasPrev && prevSmile != null) {
+        final dSmile = max(0.0, (smile - prevSmile).abs() - 0.015);
+        delta += dSmile * 1.8;
+      }
       track.lastSmile = smile;
     }
     // Direct pixel mouth-region luma delta (works on ALL faces, not just the
@@ -1396,7 +1410,7 @@ class FaceDetectionService {
         n++;
       }
     }
-    return n == 0 ? 0.0 : (sum / n) / 255.0;
+    return n == 0 ? 0.0 : max(0.0, (sum / n) / 255.0 - 0.0065);
   }
 
   /// Relative lip gap / mouth width for one face, each normalized by the face
