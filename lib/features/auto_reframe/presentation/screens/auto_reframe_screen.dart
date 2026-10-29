@@ -1044,66 +1044,57 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment<bool>(
-                  value: true,
-                  icon: Icon(Icons.videocam, size: 16),
-                  label: Text('Camera View', style: TextStyle(fontSize: 12)),
+            Expanded(
+              child: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: Icon(Icons.videocam, size: 15),
+                    label: Text('Camera 9:16', style: TextStyle(fontSize: 11.5)),
+                  ),
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: Icon(Icons.crop_free, size: 15),
+                    label: Text('Full Frame', style: TextStyle(fontSize: 11.5)),
+                  ),
+                ],
+                selected: {_cameraViewMode},
+                onSelectionChanged: (s) =>
+                    setState(() => _cameraViewMode = s.first),
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
                 ),
-                ButtonSegment<bool>(
-                  value: false,
-                  icon: Icon(Icons.crop_free, size: 16),
-                  label: Text('Full Frame', style: TextStyle(fontSize: 12)),
-                ),
-              ],
-              selected: {_cameraViewMode},
-              onSelectionChanged: (s) =>
-                  setState(() => _cameraViewMode = s.first),
-              style: const ButtonStyle(
-                visualDensity: VisualDensity.compact,
               ),
             ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_track != null && _track!.speakers.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ActionChip(
-                      visualDensity: VisualDensity.compact,
-                      avatar: Icon(
-                        Icons.touch_app,
-                        size: 15,
-                        color: _showTapBoxesOnPreview
-                            ? const Color(0xFF00E676)
-                            : Colors.white54,
-                      ),
-                      label: Text(
-                        _showTapBoxesOnPreview ? 'اللمس مفعل' : 'اللمس مخفي',
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      onPressed: () => setState(
-                        () => _showTapBoxesOnPreview = !_showTapBoxesOnPreview,
-                      ),
-                    ),
-                  ),
-                IconButton.filledTonal(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () {
-                    setState(() {
-                      controller.value.isPlaying
-                          ? controller.pause()
-                          : controller.play();
-                    });
-                  },
-                  icon: Icon(
-                    controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                  ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: controller.value.isPlaying
+                    ? Colors.orangeAccent
+                    : const Color(0xFF00E676),
+                foregroundColor: Colors.black,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              onPressed: () {
+                setState(() {
+                  controller.value.isPlaying
+                      ? controller.pause()
+                      : controller.play();
+                });
+              },
+              icon: Icon(
+                controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                size: 18,
+              ),
+              label: Text(
+                controller.value.isPlaying ? 'إيقاف' : 'تشغيل',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
                 ),
-              ],
+              ),
             ),
           ],
         ),
@@ -1285,7 +1276,108 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
               ),
             ),
           ),
+        const SizedBox(height: 8),
+        _buildPlaybackTransportBar(controller),
       ],
+    );
+  }
+
+  Widget _buildPlaybackTransportBar(VideoPlayerController controller) {
+    final isPlaying = controller.value.isPlaying;
+    final pos = _positionSeconds.clamp(0.0, _durationSeconds);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'رجوع 2 ثانية',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _seekToTime(pos - 2.0),
+                icon: const Icon(Icons.replay_5, size: 20),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: isPlaying
+                      ? Colors.orangeAccent
+                      : const Color(0xFFE040FB),
+                  foregroundColor: isPlaying ? Colors.black : Colors.white,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                ),
+                onPressed: () {
+                  setState(() {
+                    isPlaying ? controller.pause() : controller.play();
+                  });
+                },
+                icon: Icon(
+                  isPlaying ? Icons.pause_circle_filled : Icons.play_circle_fill,
+                  size: 20,
+                ),
+                label: Text(
+                  isPlaying ? 'إيقاف مؤقت' : 'تشغيل الفيديو',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'تقديم 2 ثانية',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _seekToTime(pos + 2.0),
+                icon: const Icon(Icons.forward_5, size: 20),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${_formatTimeTenths(pos)} / ${_formatTimeTenths(_durationSeconds)}',
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  color: AppColors.textSecondary,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: _showTapBoxesOnPreview
+                    ? 'إخفاء مربعات التحديد فوق الفيديو'
+                    : 'إظهار مربعات التحديد فوق الفيديو',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(
+                  () => _showTapBoxesOnPreview = !_showTapBoxesOnPreview,
+                ),
+                icon: Icon(
+                  _showTapBoxesOnPreview
+                      ? Icons.visibility
+                      : Icons.visibility_off,
+                  size: 18,
+                  color: _showTapBoxesOnPreview
+                      ? const Color(0xFF00E676)
+                      : Colors.white54,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -1304,18 +1396,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     if (track == null) return const [];
     final widgets = <Widget>[];
 
-    for (final face in faces) {
+    for (var i = 0; i < faces.length; i++) {
+      final face = faces[i];
       final relX = (face.normX - (cx - halfW)) / cropFracW;
       final relY = (face.normY - (cy - halfH)) / cropFracH;
-      if (relX < -0.25 || relX > 1.25 || relY < -0.25 || relY > 1.25) {
+      if (relX < -0.15 || relX > 1.15 || relY < -0.15 || relY > 1.15) {
         continue;
       }
 
-      final double boxW = ((face.normW / cropFracW) * activeW * 1.25)
-          .clamp(48.0, activeW * 0.78)
+      final double boxW = ((face.normW / cropFracW) * activeW * 1.10)
+          .clamp(40.0, activeW * 0.55)
           .toDouble();
-      final double boxH = ((face.normH / cropFracH) * activeH * 1.45)
-          .clamp(58.0, activeH * 0.70)
+      final double boxH = ((face.normH / cropFracH) * activeH * 1.25)
+          .clamp(48.0, activeH * 0.55)
           .toDouble();
       final double maxLeft = max<double>(2.0, activeW - boxW - 2.0);
       final double maxTop = max<double>(2.0, activeH - boxH - 2.0);
@@ -1325,19 +1418,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           (relY * activeH - boxH * 0.42).clamp(2.0, maxTop).toDouble();
 
       final Color borderColor;
-      final String statusBadge;
+      final String statusIcon;
       if (face.locked) {
         borderColor = const Color(0xFFE040FB);
-        statusBadge = '🔒 مثبت';
+        statusIcon = '🔒';
       } else if (face.isSpeaking) {
         borderColor = const Color(0xFF00E676);
-        statusBadge = '🎤 يتحدث';
+        statusIcon = '🎤';
       } else {
         borderColor = const Color(0xFF00E5FF);
-        statusBadge = '👆 المس للتثبيت';
+        statusIcon = '👆';
       }
 
-      final shortName = face.label.split(' ').take(2).join(' ');
+      final alignAtBottom = i.isOdd;
 
       widgets.add(
         Positioned(
@@ -1351,34 +1444,30 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: borderColor.withValues(
-                    alpha: face.locked || face.isSpeaking ? 0.90 : 0.65,
+                    alpha: face.locked || face.isSpeaking ? 0.92 : 0.60,
                   ),
-                  width: face.locked || face.isSpeaking ? 2.0 : 1.3,
+                  width: face.locked || face.isSpeaking ? 2.0 : 1.2,
                 ),
               ),
-              alignment: Alignment.topCenter,
-              child: Transform.translate(
-                offset: const Offset(0, -1),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 1.5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: borderColor.withValues(alpha: 0.85),
-                    borderRadius: const BorderRadius.vertical(
-                      bottom: Radius.circular(5),
-                    ),
-                  ),
-                  child: Text(
-                    '$shortName · $statusBadge',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 8.5,
-                      color: Colors.black,
-                      fontWeight: FontWeight.w800,
-                    ),
+              alignment:
+                  alignAtBottom ? Alignment.bottomCenter : Alignment.topCenter,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: borderColor.withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '$statusIcon #${face.speakerId}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: Colors.black,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
@@ -1403,118 +1492,149 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     final halfW = cropFracW / 2;
     final cx = normX.clamp(halfW, 1.0 - halfW);
 
-    return SizedBox(
-      height: 44,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final stripW = constraints.maxWidth;
-          final stripH = constraints.maxHeight;
-          final winW = stripW * cropFracW;
-          final winLeft = ((cx - halfW) * stripW).clamp(0.0, stripW - winW);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 34,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final stripW = constraints.maxWidth;
+              final stripH = constraints.maxHeight;
+              final winW = stripW * cropFracW;
+              final double winLeft =
+                  ((cx - halfW) * stripW).clamp(0.0, stripW - winW).toDouble();
 
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanStart: (_) => _onCropPanStart(),
-            onPanUpdate: (details) => _onCropPanUpdate(
-              details.delta.dx,
-              0,
-              stripW,
-              stripW / srcAspect,
-            ),
-            onPanEnd: (_) => _onCropPanEnd(),
-            onTapUp: (details) {
-              if (stripW <= 0) return;
-              final tapX = (details.localPosition.dx / stripW).clamp(0.0, 1.0);
-              if (_selectSpeakerNearTap(tapX, normY)) return;
-              final (clampedX, clampedY) = _clampCropCenter(
-                tapX,
-                normY,
-                stripW,
-                stripW / srcAspect,
-              );
-              _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.surfaceLight,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white24),
-              ),
-              child: Stack(
-                children: [
-                  for (final face in faces)
-                    Positioned(
-                      left: (face.normX * stripW - 26).clamp(2.0, stripW - 58),
-                      top: 8,
-                      child: GestureDetector(
-                        onTap: () {
-                          final track = _track;
-                          if (track == null) return;
-                          for (final p in track.speakers) {
-                            if (p.id == face.speakerId) {
-                              _toggleTapLockOnPerson(p);
-                              break;
-                            }
-                          }
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 3,
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (_) => _onCropPanStart(),
+                onPanUpdate: (details) => _onCropPanUpdate(
+                  details.delta.dx,
+                  0,
+                  stripW,
+                  stripW / srcAspect,
+                ),
+                onPanEnd: (_) => _onCropPanEnd(),
+                onTapUp: (details) {
+                  if (stripW <= 0) return;
+                  final tapX =
+                      (details.localPosition.dx / stripW).clamp(0.0, 1.0);
+                  if (_selectSpeakerNearTap(tapX, normY)) return;
+                  final (clampedX, clampedY) = _clampCropCenter(
+                    tapX,
+                    normY,
+                    stripW,
+                    stripW / srcAspect,
+                  );
+                  _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: Stack(
+                    children: [
+                      for (final face in faces)
+                        Positioned(
+                          left: (face.normX * stripW - 6)
+                              .clamp(4.0, max<double>(4.0, stripW - 16.0))
+                              .toDouble(),
+                          top: (stripH - 12) * 0.5,
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: face.locked
+                                  ? const Color(0xFFE040FB)
+                                  : (face.isSpeaking
+                                      ? const Color(0xFF00E676)
+                                      : const Color(0xFF00E5FF)),
+                              border: Border.all(
+                                color: Colors.black,
+                                width: 1.5,
+                              ),
+                            ),
                           ),
-                          decoration: BoxDecoration(
-                            color: face.locked
-                                ? const Color(0xFFE040FB)
-                                : (face.isSpeaking
-                                    ? const Color(0xFF00E676)
-                                    : Colors.cyan.withValues(alpha: 0.80)),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            '${face.locked ? '🔒 ' : (face.isSpeaking ? '🎤 ' : '')}'
-                            '${face.label.split(' ').take(2).join(' ')}',
-                            style: TextStyle(
-                              fontSize: 9.5,
-                              color: face.isSpeaking && !face.locked
-                                  ? Colors.black
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
+                        ),
+                      Positioned(
+                        left: winLeft,
+                        top: 2,
+                        width: winW,
+                        height: stripH - 4,
+                        child: IgnorePointer(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE040FB)
+                                  .withValues(alpha: 0.20),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: const Color(0xFFE040FB),
+                                width: 2,
+                              ),
+                            ),
+                            alignment: Alignment.center,
+                            child: const Icon(
+                              Icons.open_with,
+                              size: 13,
+                              color: Colors.white70,
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  Positioned(
-                    left: winLeft,
-                    top: 2,
-                    width: winW,
-                    height: stripH - 4,
-                    child: IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color:
-                              const Color(0xFFE040FB).withValues(alpha: 0.20),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: const Color(0xFFE040FB),
-                            width: 2,
-                          ),
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(
-                          Icons.open_with,
-                          size: 14,
-                          color: Colors.white70,
-                        ),
-                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (faces.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final face in faces)
+                ActionChip(
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: face.locked
+                      ? const Color(0xFFE040FB).withValues(alpha: 0.25)
+                      : (face.isSpeaking
+                          ? const Color(0xFF00E676).withValues(alpha: 0.22)
+                          : AppColors.surfaceLight),
+                  side: BorderSide(
+                    color: face.locked
+                        ? const Color(0xFFE040FB)
+                        : (face.isSpeaking
+                            ? const Color(0xFF00E676)
+                            : Colors.white24),
+                  ),
+                  label: Text(
+                    '${face.locked ? '🔒 مثبت: ' : (face.isSpeaking ? '🎤 يتحدث: ' : '👆 تثبيت: ')}'
+                    '${face.label.split(' ').take(2).join(' ')}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
+                  onPressed: () {
+                    final track = _track;
+                    if (track == null) return;
+                    for (final p in track.speakers) {
+                      if (p.id == face.speakerId) {
+                        _toggleTapLockOnPerson(p);
+                        break;
+                      }
+                    }
+                  },
+                ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -2402,13 +2522,22 @@ class ReframeOverlayPainter extends CustomPainter {
       }
     }
 
-    for (final face in faces) {
+    for (var i = 0; i < faces.length; i++) {
+      final face = faces[i];
       final center = Offset(face.normX * size.width, face.normY * size.height);
-      final boxW = (face.normW * size.width * 1.25).clamp(38.0, size.width * 0.45);
-      final boxH = (face.normH * size.height * 1.55).clamp(48.0, size.height * 0.65);
+      final double boxW = (face.normW * size.width * 1.15)
+          .clamp(36.0, size.width * 0.40)
+          .toDouble();
+      final double boxH = (face.normH * size.height * 1.35)
+          .clamp(44.0, size.height * 0.58)
+          .toDouble();
       final personRect = Rect.fromLTWH(
-        (center.dx - boxW * 0.5).clamp(2.0, size.width - boxW - 2.0),
-        (center.dy - boxH * 0.38).clamp(2.0, size.height - boxH - 2.0),
+        (center.dx - boxW * 0.5)
+            .clamp(2.0, max<double>(2.0, size.width - boxW - 2.0))
+            .toDouble(),
+        (center.dy - boxH * 0.38)
+            .clamp(2.0, max<double>(2.0, size.height - boxH - 2.0))
+            .toDouble(),
         boxW,
         boxH,
       );
@@ -2423,7 +2552,7 @@ class ReframeOverlayPainter extends CustomPainter {
         statusText = '🎤 يتحدث';
       } else {
         color = const Color(0xFF00E5FF);
-        statusText = '👆 المس للتثبيت';
+        statusText = '👆 تثبيت';
       }
 
       final rrect = RRect.fromRectAndRadius(personRect, const Radius.circular(8));
@@ -2439,13 +2568,12 @@ class ReframeOverlayPainter extends CustomPainter {
           ..strokeWidth = face.locked || face.isSpeaking ? 2.4 : 1.5,
       );
 
-      final shortLabel = face.label.split(' ').take(2).join(' ');
       final label = TextPainter(
         text: TextSpan(
-          text: ' $shortLabel · $statusText ',
+          text: ' #${face.speakerId} $statusText ',
           style: TextStyle(
             color: face.isSpeaking && !face.locked ? Colors.black : Colors.white,
-            fontSize: 10,
+            fontSize: 9.5,
             fontWeight: FontWeight.w700,
             backgroundColor: face.locked
                 ? const Color(0xDD9C27B0)
@@ -2456,12 +2584,18 @@ class ReframeOverlayPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
+      final double labelX = personRect.left
+          .clamp(0.0, max<double>(0.0, size.width - label.width))
+          .toDouble();
+      final double labelY = i.isEven
+          ? max<double>(0.0, personRect.top - label.height - 2)
+          : min<double>(
+              max<double>(0.0, size.height - label.height),
+              personRect.bottom + 2,
+            );
       label.paint(
         canvas,
-        Offset(
-          personRect.left.clamp(0.0, size.width - label.width),
-          max(0.0, personRect.top - label.height - 2),
-        ),
+        Offset(labelX, labelY),
       );
     }
 
