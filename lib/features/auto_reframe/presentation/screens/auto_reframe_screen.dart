@@ -107,6 +107,10 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   /// Crop-box drag origin (normalized), kept across a pan gesture.
   (double, double)? _dragOrigin;
 
+  /// When true, the preview renders the live cropped 9:16 virtual camera
+  /// viewport (moving like a real camera) instead of a static 16:9 crop box.
+  bool _cameraViewMode = true;
+
   bool _analyzing = false;
   double _analysisProgress = 0;
   String _analysisStatus = '';
@@ -296,7 +300,9 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return best;
   }
 
-  /// Insert-or-update a manual keyframe at [timeSec] (tight ±0.25s window).
+  /// Insert-or-update a manual camera keyframe at [timeSec].
+  /// Manual edits default to smooth camera motion (`isCut: false`) and prune
+  /// nearby conflicting AI points so the viewport moves like a real camera.
   void _upsertManualKeyframeAt(double timeSec, double normX, double normY) {
     setState(() {
       _workingKeyframes = FaceDetectionService.upsertManualKeyframe(
@@ -304,6 +310,8 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         timeSec: timeSec,
         normX: normX,
         normY: normY,
+        isCut: false,
+        clearNearbyAiKeyframes: true,
       );
     });
   }
@@ -796,98 +804,324 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     }
 
     final size = controller.value.size;
-    final aspect = size.width > 0 && size.height > 0
+    final srcAspect = size.width > 0 && size.height > 0
         ? size.width / size.height
         : 16 / 9;
     final effective = _effectiveTrack;
-    final (normX, normY) = _currentSampledPosition(_positionSeconds);
+    final (rawNormX, rawNormY) = _currentSampledPosition(_positionSeconds);
+    final faceTracking = _config.style == AutoReframeStyle.smartFaceCrop;
+    final normX = faceTracking ? rawNormX : 0.5;
+    final normY = faceTracking ? rawNormY : 0.5;
     final faces = _faceMarkersAt(_positionSeconds);
+    final effectiveAspect = _effectiveCropAspect();
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: AspectRatio(
-            aspectRatio: aspect,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final previewW = constraints.maxWidth;
-                final previewH = constraints.maxHeight;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  // Always-on CapCut-style direct manipulation: one-finger
-                  // drag moves the crop box (no mode toggle needed), and
-                  // playback pauses automatically while dragging.
-                  onPanStart: (_) => _onCropPanStart(),
-                  onPanUpdate: (details) => _onCropPanUpdate(
-                    details.delta.dx,
-                    details.delta.dy,
-                    previewW,
-                    previewH,
-                  ),
-                  onPanEnd: (_) => _onCropPanEnd(),
-                  // No onDoubleTap here: attaching it would make the gesture
-                  // arena delay EVERY single tap by ~300ms. A single tap is
-                  // enough — near a detected person it locks that speaker,
-                  // anywhere else it moves the crop box to the tapped spot.
-                  onTapUp: (details) {
-                    if (previewW <= 0 || previewH <= 0) return;
-                    final normX =
-                        (details.localPosition.dx / previewW).clamp(0.0, 1.0);
-                    final normY =
-                        (details.localPosition.dy / previewH).clamp(0.0, 1.0);
-                    if (_selectSpeakerNearTap(normX, normY)) return;
-                    final (cx, cy) = _clampCropCenter(
-                      normX,
-                      normY,
-                      previewW,
-                      previewH,
+        // Mode switch bar: Virtual Camera View (9:16) vs Full Source Frame (16:9)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment<bool>(
+                  value: true,
+                  icon: Icon(Icons.videocam, size: 16),
+                  label: Text('Camera View', style: TextStyle(fontSize: 12)),
+                ),
+                ButtonSegment<bool>(
+                  value: false,
+                  icon: Icon(Icons.crop_free, size: 16),
+                  label: Text('Full Frame', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+              selected: {_cameraViewMode},
+              onSelectionChanged: (s) =>
+                  setState(() => _cameraViewMode = s.first),
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            IconButton.filledTonal(
+              visualDensity: VisualDensity.compact,
+              onPressed: () {
+                setState(() {
+                  controller.value.isPlaying
+                      ? controller.pause()
+                      : controller.play();
+                });
+              },
+              icon: Icon(
+                controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_cameraViewMode &&
+            _config.style != AutoReframeStyle.blurBackgroundFrame) ...[
+          // Live cropped Virtual Camera Viewport (pans like a real camera)
+          Container(
+            height: 300,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: const Color(0xFFE040FB).withValues(alpha: 0.7),
+                width: 1.5,
+              ),
+            ),
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: _config.aspectRatio,
+                child: LayoutBuilder(
+                  builder: (context, outerConstraints) {
+                    final canvasW = outerConstraints.maxWidth;
+                    final canvasH = outerConstraints.maxHeight;
+                    final (outW, outH) = _config.outputSize;
+                    final fill = _config.frameFillClamped;
+                    final innerBox = FfmpegAutoReframeService.innerBoxForFill(
+                      outW: outW,
+                      outH: outH,
+                      frameFill: fill,
                     );
-                    _upsertManualKeyframeAt(_positionSeconds, cx, cy);
-                  },
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      VideoPlayer(controller),
-                      CustomPaint(
-                        painter: ReframeOverlayPainter(
-                          targetAspect: _config.aspectRatio,
-                          outW: _config.outputSize.$1,
-                          outH: _config.outputSize.$2,
-                          frameFill: _config.frameFillClamped,
-                          normX: normX,
-                          normY: normY,
-                          style: _config.style,
-                          speakerLocked: effective != null,
-                          faces: faces,
-                        ),
+                    final activeW = canvasW * (innerBox.boxW / outW);
+                    final activeH = canvasH * (innerBox.boxH / outH);
+
+                    final cropFracW = srcAspect > effectiveAspect
+                        ? (effectiveAspect / srcAspect).clamp(0.05, 1.0)
+                        : 1.0;
+                    final cropFracH = srcAspect > effectiveAspect
+                        ? 1.0
+                        : (srcAspect / effectiveAspect).clamp(0.05, 1.0);
+                    final halfW = cropFracW / 2;
+                    final halfH = cropFracH / 2;
+                    final cx = normX.clamp(halfW, 1.0 - halfW);
+                    final cy = normY.clamp(halfH, 1.0 - halfH);
+
+                    final fullVideoW = activeW / cropFracW;
+                    final fullVideoH = activeH / cropFracH;
+                    final offsetX = -(cx - halfW) * fullVideoW;
+                    final offsetY = -(cy - halfH) * fullVideoH;
+
+                    return GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanStart: (_) => _onCropPanStart(),
+                      // Dragging on the camera viewport pans the camera smoothly
+                      onPanUpdate: (details) => _onCropPanUpdate(
+                        details.delta.dx,
+                        details.delta.dy,
+                        fullVideoW,
+                        fullVideoH,
                       ),
-                      Positioned(
-                        right: 8,
-                        bottom: 8,
-                        child: IconButton.filledTonal(
-                          onPressed: () {
-                            setState(() {
-                              controller.value.isPlaying
-                                  ? controller.pause()
-                                  : controller.play();
-                            });
-                          },
-                          icon: Icon(
-                            controller.value.isPlaying
-                                ? Icons.pause
-                                : Icons.play_arrow,
+                      onPanEnd: (_) => _onCropPanEnd(),
+                      child: Container(
+                        color: Colors.black,
+                        alignment: Alignment.center,
+                        child: SizedBox(
+                          width: activeW,
+                          height: activeH,
+                          child: ClipRect(
+                            child: Stack(
+                              clipBehavior: Clip.hardEdge,
+                              children: [
+                                Positioned(
+                                  left: offsetX,
+                                  top: offsetY,
+                                  width: fullVideoW,
+                                  height: fullVideoH,
+                                  child: VideoPlayer(controller),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ),
             ),
           ),
-        ),
+          const SizedBox(height: 8),
+          // 16:9 Camera Position Strip (Mini-Map): shows where the camera is
+          // aiming across the full horizontal scene and lets the user drag/tap
+          _buildCameraStripMiniMap(
+            srcAspect: srcAspect,
+            effectiveAspect: effectiveAspect,
+            normX: normX,
+            normY: normY,
+            faces: faces,
+          ),
+        ] else
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: AspectRatio(
+              aspectRatio: srcAspect,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final previewW = constraints.maxWidth;
+                  final previewH = constraints.maxHeight;
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: (_) => _onCropPanStart(),
+                    onPanUpdate: (details) => _onCropPanUpdate(
+                      details.delta.dx,
+                      details.delta.dy,
+                      previewW,
+                      previewH,
+                    ),
+                    onPanEnd: (_) => _onCropPanEnd(),
+                    onTapUp: (details) {
+                      if (previewW <= 0 || previewH <= 0) return;
+                      final tapX =
+                          (details.localPosition.dx / previewW).clamp(0.0, 1.0);
+                      final tapY =
+                          (details.localPosition.dy / previewH).clamp(0.0, 1.0);
+                      if (_selectSpeakerNearTap(tapX, tapY)) return;
+                      final (cx, cy) = _clampCropCenter(
+                        tapX,
+                        tapY,
+                        previewW,
+                        previewH,
+                      );
+                      _upsertManualKeyframeAt(_positionSeconds, cx, cy);
+                    },
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        VideoPlayer(controller),
+                        CustomPaint(
+                          painter: ReframeOverlayPainter(
+                            targetAspect: _config.aspectRatio,
+                            outW: _config.outputSize.$1,
+                            outH: _config.outputSize.$2,
+                            frameFill: _config.frameFillClamped,
+                            normX: normX,
+                            normY: normY,
+                            style: _config.style,
+                            speakerLocked: effective != null,
+                            faces: faces,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// Interactive horizontal camera strip below the 9:16 Camera View: shows all
+  /// detected speakers and the active camera window across the 16:9 scene.
+  Widget _buildCameraStripMiniMap({
+    required double srcAspect,
+    required double effectiveAspect,
+    required double normX,
+    required double normY,
+    required List<ReframeFaceMarker> faces,
+  }) {
+    final cropFracW = srcAspect > effectiveAspect
+        ? (effectiveAspect / srcAspect).clamp(0.08, 1.0)
+        : 1.0;
+    final halfW = cropFracW / 2;
+    final cx = normX.clamp(halfW, 1.0 - halfW);
+
+    return SizedBox(
+      height: 40,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stripW = constraints.maxWidth;
+          final stripH = constraints.maxHeight;
+          final winW = stripW * cropFracW;
+          final winLeft = ((cx - halfW) * stripW).clamp(0.0, stripW - winW);
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (_) => _onCropPanStart(),
+            onPanUpdate: (details) => _onCropPanUpdate(
+              details.delta.dx,
+              0,
+              stripW,
+              stripW / srcAspect,
+            ),
+            onPanEnd: (_) => _onCropPanEnd(),
+            onTapUp: (details) {
+              if (stripW <= 0) return;
+              final tapX = (details.localPosition.dx / stripW).clamp(0.0, 1.0);
+              if (_selectSpeakerNearTap(tapX, normY)) return;
+              final (clampedX, clampedY) = _clampCropCenter(
+                tapX,
+                normY,
+                stripW,
+                stripW / srcAspect,
+              );
+              _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white24),
+              ),
+              child: Stack(
+                children: [
+                  for (final face in faces)
+                    Positioned(
+                      left: (face.normX * stripW - 14).clamp(2.0, stripW - 30),
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: face.locked
+                              ? const Color(0xFFE040FB)
+                              : Colors.cyan.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          face.label.split(' ').take(2).join(' '),
+                          style: const TextStyle(
+                            fontSize: 9,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: winLeft,
+                    top: 2,
+                    width: winW,
+                    height: stripH - 4,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE040FB).withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: const Color(0xFFE040FB),
+                          width: 2,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.videocam,
+                        size: 14,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 

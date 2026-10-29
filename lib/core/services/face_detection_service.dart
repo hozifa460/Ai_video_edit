@@ -176,13 +176,20 @@ class _SpeakerTrack {
   double normW = 0;
   double normH = 0;
 
+  /// Landmark-stabilized face box (prevents ML Kit box-padding jitter from
+  /// shifting the mouth ROI across a static beard or collar).
+  double stabNx0 = 0.4;
+  double stabNy0 = 0.25;
+  double stabNx1 = 0.6;
+  double stabNy1 = 0.55;
+
   /// Previous **relative** lip geometry (never absolute image coordinates).
   double? lastOpen;
   double? lastWidth;
 
-  /// Last smiling probability from ML Kit classification — used for the
-  /// articulation delta (speaking moves mouth corners continuously).
-  double? lastSmile;
+  /// Previous inner-mouth vs upper-cheek luma contrast (invariant to static
+  /// beards and global lighting shifts).
+  double? lastMouthContrast;
 
   /// Per-frame center displacement of this track (used to penalize fast-moving
   /// passersby with low mouth activity).
@@ -196,22 +203,60 @@ class _SpeakerTrack {
   /// face). Cleared as soon as a real face is associated with this track.
   bool isSilhouette = false;
 
-  /// Rolling window of the last 4 lip deltas.
+  /// Rolling window of recent lip deltas.
   final List<double> lipDeltas = <double>[];
+
+  /// Consecutive frames without speech-level lip articulation.
+  int silentFrames = 0;
+
+  /// Last timestamp where this person showed active lip articulation.
+  double lastSpokeSec = -10.0;
 
   /// Every frame in which this person was visible, with its own trajectory.
   final List<FaceTrackPoint> points = <FaceTrackPoint>[];
 
   double? lockStartSec;
 
-  /// Mouth movement dominates (that is what "speaking" means); face area and
-  /// persistence break ties for people who are silent in every sample.
-  /// Fast-moving passersby (high center velocity, low mouth activity) are
-  /// heavily penalized so they never steal focus.
+  /// Number of frames in the rolling window with speech-level mouth motion.
+  int get speakingFrames {
+    var count = 0;
+    for (final d in lipDeltas) {
+      if (d >= 0.014) count++;
+    }
+    return count;
+  }
+
+  void recordSpeechSample(
+    double delta, {
+    required double nowSec,
+    required int window,
+  }) {
+    lipDeltas.add(delta);
+    if (lipDeltas.length > window) {
+      lipDeltas.removeAt(0);
+    }
+    if (delta >= 0.014) {
+      silentFrames = 0;
+      lastSpokeSec = nowSec;
+    } else {
+      silentFrames++;
+    }
+  }
+
+  /// Sustained mouth movement dominates (that is what "speaking" means);
+  /// face area is strictly a tiny tie-breaker when nobody in the shot has
+  /// spoken, so a silent bystander standing closer to the camera can never
+  /// outscore a smaller speaking face.
   double get score {
-    var s = recentActivity * 12.0 + areaNorm * 0.6 +
-        0.02 * (min(hits, 6) / 6);
-    if (lastMoveDelta > 0.055 && recentActivity < 0.025) s *= 0.15;
+    if (isSilhouette) {
+      return silhouetteActivity * 12.0 + areaNorm * 0.04;
+    }
+    final activeCount = speakingFrames;
+    final mult = activeCount >= 2 ? 16.0 : (activeCount == 1 ? 8.5 : 4.0);
+    var s = recentActivity * mult +
+        areaNorm * 0.06 +
+        0.01 * (min(hits, 6) / 6);
+    if (lastMoveDelta > 0.045 && activeCount < 2) s *= 0.15;
     return s;
   }
 
@@ -244,9 +289,9 @@ typedef SilhouetteSubject = ({
 ///
 /// Pipeline: **one** FFmpeg frame-extraction pass (960px, dense fps) → one
 /// accurate `FaceDetector` for all frames → IoU/center association per person →
-/// lip-relative speech activity with a 1.2s speaker lock → shot segmentation
-/// (no smoothing across jumps) → per-shot dead-zone + bidirectional EMA →
-/// RDP simplification capped at [maxKeyframes] keyframes with instant cuts.
+/// lip-relative speech activity with sustained-speech hysteresis → shot
+/// segmentation (no smoothing across speaker cuts) → per-shot dead-zone +
+/// bidirectional EMA → RDP simplification capped at [maxKeyframes] keyframes.
 class FaceDetectionService {
   FaceDetectionService._();
 
@@ -259,17 +304,22 @@ class FaceDetectionService {
 
   /// A normalized move this large (in one sample) is a **speaker switch or
   /// scene cut**, not camera motion: smoothing must stop at the boundary.
-  static const double speakerJumpThreshold = 0.075;
+  static const double speakerJumpThreshold = 0.135;
 
   /// Association tolerances (normalized frame units).
   static const double associationDistance = 0.15;
   static const double minFaceOverlap = 0.1;
 
-  /// Minimum time the camera stays on one speaker before it may switch.
-  static const double speakerLockSeconds = 0.5;
+  /// Minimum time the camera stays on one speaker before a turn-taking switch.
+  static const double speakerLockSeconds = 0.9;
 
-  /// Frames kept in the rolling lip-delta window.
-  static const int lipWindow = 4;
+  /// Frames kept in the rolling lip-delta window (~1.5s at 4fps).
+  static const int lipWindow = 6;
+
+  /// High-resolution grid used for mouth/upper-face luma analysis (4x4 source
+  /// pixels per cell on 960x540 frames).
+  static const int mouthGridWidth = 240;
+  static const int mouthGridHeight = 135;
 
   // ---------------------------------------------------------------------------
   // Analysis
@@ -301,12 +351,12 @@ class FaceDetectionService {
     // Dense sampling keeps lip deltas meaningful; the old 1-2 fps pass made
     // wide 16:9 multi-speaker faces too small and too sparse to compare.
     final double sampleFps;
-    if (clipDuration <= 90) {
+    if (clipDuration <= 180) {
       sampleFps = 4.0;
-    } else if (clipDuration <= 240) {
-      sampleFps = 2.5;
+    } else if (clipDuration <= 360) {
+      sampleFps = 3.0;
     } else {
-      sampleFps = max(1.5, 240.0 / clipDuration);
+      sampleFps = max(2.0, 540.0 / clipDuration);
     }
 
     final tempDir = await getTemporaryDirectory();
@@ -369,10 +419,13 @@ class FaceDetectionService {
       var facesDetectedCount = 0;
       var silhouetteHits = 0;
       Uint8List? prevGridBytes;
+      Uint8List? prevMouthGridBytes;
       _SpeakerTrack? currentSpeaker;
       var lastX = 0.5;
       var lastY = 0.45;
       double? lastFaceSeenSec;
+      var sceneStartPointIdx = 0;
+      var sceneSpeakerConfirmed = false;
       // Distant/background false-positive boxes (decor, small objects) must
       // never drive the camera: a person occupies a meaningful share of the
       // frame in any usable interview/podcast shot.
@@ -390,7 +443,9 @@ class FaceDetectionService {
           faces = const [];
         }
 
-        final grid = await _analysisGrid(frames[i].path);
+        final decodedGrids = await _decodeAnalysisGrids(frames[i].path);
+        final grid = decodedGrids?.silhouetteGrid;
+        final mouthGrid = decodedGrids?.mouthGrid;
 
         var cut = false;
         if (grid != null) {
@@ -404,13 +459,23 @@ class FaceDetectionService {
             // Release any speaker lock with 0ms delay so the camera snaps on
             // the exact frame of the cut.
             currentSpeaker = null;
+            sceneStartPointIdx = activePoints.length;
+            sceneSpeakerConfirmed = false;
           }
         }
+
+        // Process larger foreground faces first so they claim their track
+        // before any smaller background faces in the same frame.
+        final sortedFaces = List<Face>.of(faces)
+          ..sort(
+            (a, b) => (b.boundingBox.width * b.boundingBox.height)
+                .compareTo(a.boundingBox.width * a.boundingBox.height),
+          );
 
         final present = <_SpeakerTrack>[];
         final faceBoxes = <({double x0, double y0, double x1, double y1})>[];
         var maxFaceArea = 0.0;
-        for (final face in faces) {
+        for (final face in sortedFaces) {
           final box = face.boundingBox;
           if (box.height < minFaceHeight || box.width < minFaceWidth) {
             continue; // background noise, not a person
@@ -451,26 +516,34 @@ class FaceDetectionService {
             allowExisting: !cut,
           );
           if (track == null) {
-            final created = _SpeakerTrack(tracks.length);
+            final created = _SpeakerTrack(tracks.length)
+              ..stabNx0 = nx0
+              ..stabNy0 = ny0
+              ..stabNx1 = nx1
+              ..stabNy1 = ny1;
             tracks[created.id] = created;
             present.add(created);
-            // Move delta for a brand-new track is 0 (no previous position).
             created.lastMoveDelta = 0;
             _updateLipActivity(
               created,
               face,
               box,
+              imgWidth: imgWidth,
+              imgHeight: imgHeight,
               nx0: nx0,
               ny0: ny0,
               nx1: nx1,
               ny1: ny1,
-              prevNx0: created.normX - created.normW / 2,
-              prevNy0: created.normY - created.normH / 2,
-              prevNx1: created.normX + created.normW / 2,
-              prevNy1: created.normY + created.normH / 2,
+              prevNx0: nx0,
+              prevNy0: ny0,
+              prevNx1: nx1,
+              prevNy1: ny1,
               hasPrev: false,
               currGrid: null,
               prevGrid: null,
+              gridW: mouthGridWidth,
+              gridH: mouthGridHeight,
+              nowSec: timeSec,
             );
             _updateTrack(created, timeSec, cx, cy, nx1 - nx0, ny1 - ny0);
             created.points.add(
@@ -494,17 +567,22 @@ class FaceDetectionService {
             track,
             face,
             box,
+            imgWidth: imgWidth,
+            imgHeight: imgHeight,
             nx0: nx0,
             ny0: ny0,
             nx1: nx1,
             ny1: ny1,
-            prevNx0: track.normX - track.normW / 2,
-            prevNy0: track.normY - track.normH / 2,
-            prevNx1: track.normX + track.normW / 2,
-            prevNy1: track.normY + track.normH / 2,
+            prevNx0: track.stabNx0,
+            prevNy0: track.stabNy0,
+            prevNx1: track.stabNx1,
+            prevNy1: track.stabNy1,
             hasPrev: track.hits > 0,
-            currGrid: grid,
-            prevGrid: prevGridBytes,
+            currGrid: mouthGrid ?? grid,
+            prevGrid: prevMouthGridBytes ?? prevGridBytes,
+            gridW: mouthGrid != null ? mouthGridWidth : silhouetteGridWidth,
+            gridH: mouthGrid != null ? mouthGridHeight : silhouetteGridHeight,
+            nowSec: timeSec,
           );
           _updateTrack(track, timeSec, cx, cy, nx1 - nx0, ny1 - ny0);
           track.points.add(
@@ -513,25 +591,19 @@ class FaceDetectionService {
           present.add(track);
         }
 
+        // Only run the black-mask silhouette detector when fewer than 2 real
+        // faces are visible in the frame (in 2+ face crowd/interview shots,
+        // dark patches outside faceBoxes are clothing, not a masked speaker).
+        final visibleFaceCount = present.length;
         SilhouetteSubject? subject;
-        if (grid != null) {
-          cut = isSceneChange(prevGridBytes, grid, silhouetteGridWidth, silhouetteGridHeight);
-          if (cut) {
-            // Release any speaker lock with 0ms delay so the camera snaps on
-            // the exact frame of the cut.
-            currentSpeaker = null;
-          }
-          if (maxFaceArea < 0.035) {
-            subject = detectSilhouetteOrMotionSubject(
-              grid,
-              silhouetteGridWidth,
-              silhouetteGridHeight,
-              prevGridBytes,
-              excludeRects: faceBoxes,
-            );
-          } else {
-            subject = null;
-          }
+        if (grid != null && visibleFaceCount <= 1 && maxFaceArea < 0.035) {
+          subject = detectSilhouetteOrMotionSubject(
+            grid,
+            silhouetteGridWidth,
+            silhouetteGridHeight,
+            prevGridBytes,
+            excludeRects: faceBoxes,
+          );
         }
 
         if (subject != null) {
@@ -541,8 +613,6 @@ class FaceDetectionService {
             nowSec: timeSec,
             normX: subject.normX,
             normY: subject.normY,
-            // A hard scene cut starts a new identity: never inherit the
-            // previous shot's person.
             allowExisting: !subject.sceneChanged && !cut,
           );
           _SpeakerTrack subjectTrack;
@@ -555,11 +625,6 @@ class FaceDetectionService {
             subjectTrack.isSilhouette = true;
           }
 
-          // Silhouette activity: in multi-person shots, the masked speaker is
-          // active when all visible faces are silent (maxVisibleFaceActivity <
-          // 0.018) and yields when any visible face is actively speaking
-          // (>= 0.018). Solo shots keep a floor so a talking masked speaker
-          // beats an empty frame.
           double gestureDelta = 0;
           if (!cut && subjectTrack.hits > 0) {
             final dx = subject.normX - subjectTrack.normX;
@@ -588,36 +653,36 @@ class FaceDetectionService {
             );
           }
           var activity = max(gestureDelta, maskEdge * 3.2);
-          var maxVisibleFaceActivity = 0.0;
-          var hasVisibleFaces = false;
-          for (final t in tracks.values) {
-            if (!t.isSilhouette && t.lastSeenSec == timeSec) {
-              hasVisibleFaces = true;
-              if (t.recentActivity > maxVisibleFaceActivity) {
-                maxVisibleFaceActivity = t.recentActivity;
-              }
+          _SpeakerTrack? visibleFace;
+          for (final t in present) {
+            if (!t.isSilhouette) {
+              visibleFace = t;
+              break;
             }
           }
-          if (!hasVisibleFaces) {
+          if (visibleFace == null) {
+            // Solo silhouette shot (no uncovered face in frame).
             activity = max(activity, 0.045);
-            if (prevGridBytes != null && !cut && grid != null) {
-              subjectTrack.silhouetteActivity =
-                  subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
-            } else {
-              subjectTrack.silhouetteActivity = activity;
-            }
-          } else if (maxVisibleFaceActivity < 0.018) {
-            // Visible faces are silent -> the masked speaker is talking
-            activity = max(activity, 0.055);
-            if (prevGridBytes != null && !cut && grid != null) {
-              subjectTrack.silhouetteActivity =
-                  subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
-            } else {
-              subjectTrack.silhouetteActivity = activity;
-            }
+            subjectTrack.silhouetteActivity = prevGridBytes != null && !cut
+                ? subjectTrack.silhouetteActivity * 0.35 + activity * 0.65
+                : activity;
+            subjectTrack.lastSpokeSec = timeSec;
           } else {
-            // A visible face is actively moving its lips -> yield immediately (0ms delay)
-            subjectTrack.silhouetteActivity = 0.004;
+            // 1 visible face + 1 silhouette/niqab subject: only activate the
+            // silhouette when the visible face has been genuinely silent (not
+            // just taking a 1-frame breath between words!).
+            final visibleSpeaking = visibleFace.speakingFrames >= 1 ||
+                visibleFace.recentActivity >= 0.015 ||
+                (timeSec - visibleFace.lastSpokeSec) < 1.5;
+            if (!visibleSpeaking && visibleFace.silentFrames >= 3) {
+              activity = max(activity, 0.055);
+              subjectTrack.silhouetteActivity = prevGridBytes != null && !cut
+                  ? subjectTrack.silhouetteActivity * 0.35 + activity * 0.65
+                  : activity;
+              subjectTrack.lastSpokeSec = timeSec;
+            } else {
+              subjectTrack.silhouetteActivity = 0.002;
+            }
           }
 
           _updateTrack(
@@ -637,9 +702,6 @@ class FaceDetectionService {
           );
           present.add(subjectTrack);
         } else if (present.isEmpty) {
-          // Nothing credible in this frame: after a hard cut, or once no
-          // face has been seen for a while, reset to the frame center
-          // instead of holding an off-center crop on an empty wall.
           final stale = lastFaceSeenSec == null ||
               timeSec - lastFaceSeenSec > emptyFrameCenterResetSec;
           if (cut || stale) {
@@ -648,21 +710,68 @@ class FaceDetectionService {
           }
         }
 
-        // Update prevGridBytes at the end of EVERY frame.
         if (grid != null) prevGridBytes = grid;
+        if (mouthGrid != null) prevMouthGridBytes = mouthGrid;
 
+        final prevSpeaker = currentSpeaker;
         currentSpeaker = _selectSpeaker(
           present,
           currentSpeaker,
           nowSec: timeSec,
         );
+        final switchedSpeaker = cut ||
+            (currentSpeaker != null &&
+                prevSpeaker != null &&
+                !identical(currentSpeaker, prevSpeaker));
         if (currentSpeaker != null && present.contains(currentSpeaker)) {
           lastX = currentSpeaker.normX;
           lastY = currentSpeaker.normY;
+
+          // Scene-Start Backfill: on the first frames after a scene cut (or
+          // clip start), frame 0 has no prior lip delta so tie-breaking may
+          // briefly pick a silent bystander before the real speaker's lips
+          // move. Once the scene's speaker is confirmed within 2.5s of the
+          // scene start, backfill the scene's initial frames so the camera
+          // starts directly on the active speaker from the cut!
+          final confirmedNow = (!currentSpeaker.isSilhouette &&
+                  currentSpeaker.speakingFrames >= 1 &&
+                  currentSpeaker.recentActivity >= 0.015) ||
+              (currentSpeaker.isSilhouette &&
+                  currentSpeaker.silhouetteActivity >= 0.045);
+          if (!sceneSpeakerConfirmed && confirmedNow) {
+            sceneSpeakerConfirmed = true;
+            if (activePoints.length > sceneStartPointIdx &&
+                (timeSec - activePoints[sceneStartPointIdx].timeSec) <= 2.5) {
+              for (var k = sceneStartPointIdx; k < activePoints.length; k++) {
+                final tK = activePoints[k].timeSec;
+                var bx = currentSpeaker.normX;
+                var by = currentSpeaker.normY;
+                var bestDt = double.infinity;
+                for (final pt in currentSpeaker.points) {
+                  final dt = (pt.timeSec - tK).abs();
+                  if (dt < bestDt && dt <= 2.6) {
+                    bestDt = dt;
+                    bx = pt.normX;
+                    by = pt.normY;
+                  }
+                }
+                activePoints[k] = FaceTrackPoint(
+                  timeSec: tK,
+                  normX: bx,
+                  normY: by,
+                  isCut: k == sceneStartPointIdx && sceneStartPointIdx > 0,
+                );
+              }
+            }
+          }
         }
-        // A frame without any detected subject holds the last camera position.
         activePoints.add(
-          FaceTrackPoint(timeSec: timeSec, normX: lastX, normY: lastY),
+          FaceTrackPoint(
+            timeSec: timeSec,
+            normX: lastX,
+            normY: lastY,
+            isCut: switchedSpeaker && activePoints.isNotEmpty,
+          ),
         );
 
         if (i % 8 == 0 || i == frames.length - 1) {
@@ -796,12 +905,18 @@ class FaceDetectionService {
   /// chain — the interview/podcast default. Raised to 0.20 so normal seated
   /// head/posture shifts (<=20% of frame) lock into a single tripod keyframe
   /// instead of drifting as smooth multi-second pans.
-  static const double shotSteadyTolerance = 0.20;
+  /// Tight steady-shot threshold: seated jitter (<= 4% of frame) collapses to
+  /// one clean keyframe, while any real speaker movement (> 4% of frame) is
+  /// followed smoothly like a real cameraman.
+  static const double shotSteadyTolerance = 0.04;
 
-  /// Decodes one analysis JPEG into an RGBA
-  /// [silhouetteGridWidth] x [silhouetteGridHeight] grid (nearest-neighbour
-  /// downsample). Returns `null` when the frame cannot be decoded.
-  static Future<Uint8List?> _analysisGrid(String path) async {
+  /// Decodes one analysis JPEG once and returns both:
+  ///  - `silhouetteGrid`: 80x45 box-averaged RGBA grid for scene-cut and
+  ///    silhouette detection;
+  ///  - `mouthGrid`: 240x135 box-averaged RGBA grid (9x finer) for accurate
+  ///    lip-motion and upper-face rigid-motion cancellation.
+  static Future<({Uint8List silhouetteGrid, Uint8List mouthGrid})?>
+      _decodeAnalysisGrids(String path) async {
     try {
       final image = await _decodeImage(File(path));
       try {
@@ -815,26 +930,21 @@ class FaceDetectionService {
           byteData.offsetInBytes,
           byteData.lengthInBytes,
         );
-        final grid = Uint8List(silhouetteGridWidth * silhouetteGridHeight * 4);
-        for (var gy = 0; gy < silhouetteGridHeight; gy++) {
-          final sy = min(
-            gy * image.height ~/ silhouetteGridHeight,
-            image.height - 1,
-          );
-          for (var gx = 0; gx < silhouetteGridWidth; gx++) {
-            final sx = min(
-              gx * image.width ~/ silhouetteGridWidth,
-              image.width - 1,
-            );
-            final src = (sy * image.width + sx) * 4;
-            final dst = (gy * silhouetteGridWidth + gx) * 4;
-            grid[dst] = full[src];
-            grid[dst + 1] = full[src + 1];
-            grid[dst + 2] = full[src + 2];
-            grid[dst + 3] = full[src + 3];
-          }
-        }
-        return grid;
+        final silhouetteGrid = _downsampleRgbaBox(
+          full,
+          image.width,
+          image.height,
+          silhouetteGridWidth,
+          silhouetteGridHeight,
+        );
+        final mouthGrid = _downsampleRgbaBox(
+          full,
+          image.width,
+          image.height,
+          mouthGridWidth,
+          mouthGridHeight,
+        );
+        return (silhouetteGrid: silhouetteGrid, mouthGrid: mouthGrid);
       } finally {
         image.dispose();
       }
@@ -842,6 +952,44 @@ class FaceDetectionService {
       AppLogger().e('FaceTrack: analysis grid decode failed', e);
       return null;
     }
+  }
+
+  /// 2x2 box-averaged RGBA downsampler: eliminates single-pixel nearest-neighbor
+  /// aliasing on beards, collars, and background patterns.
+  static Uint8List _downsampleRgbaBox(
+    Uint8List full,
+    int srcW,
+    int srcH,
+    int dstW,
+    int dstH,
+  ) {
+    final grid = Uint8List(dstW * dstH * 4);
+    for (var gy = 0; gy < dstH; gy++) {
+      final y0 = (gy * srcH) ~/ dstH;
+      final y1 = min(srcH - 1, ((gy + 1) * srcH - 1) ~/ dstH);
+      final ym = (y0 + y1) >> 1;
+      for (var gx = 0; gx < dstW; gx++) {
+        final x0 = (gx * srcW) ~/ dstW;
+        final x1 = min(srcW - 1, ((gx + 1) * srcW - 1) ~/ dstW);
+        final xm = (x0 + x1) >> 1;
+
+        final p00 = (y0 * srcW + x0) * 4;
+        final p01 = (y0 * srcW + xm) * 4;
+        final p10 = (ym * srcW + x0) * 4;
+        final p11 = (ym * srcW + xm) * 4;
+
+        final dst = (gy * dstW + gx) * 4;
+        grid[dst] = (full[p00] + full[p01] + full[p10] + full[p11]) >> 2;
+        grid[dst + 1] =
+            (full[p00 + 1] + full[p01 + 1] + full[p10 + 1] + full[p11 + 1]) >>
+                2;
+        grid[dst + 2] =
+            (full[p00 + 2] + full[p01 + 2] + full[p10 + 2] + full[p11 + 2]) >>
+                2;
+        grid[dst + 3] = 255;
+      }
+    }
+    return grid;
   }
 
   /// Finds the **anonymized black-mask guest** in a frame where ML Kit
@@ -1269,12 +1417,15 @@ class FaceDetectionService {
     return nearest;
   }
 
-  /// True lip/speech activity: frame-to-frame change of mouth geometry
-  /// **relative to the face's own bounding box** (invariant to head motion).
+  /// True lip/speech activity: combines Mouth Aspect Ratio (MAR), pitch-invariant
+  /// jaw drop, inner-mouth vs cheek contrast modulation, and rigid-motion-canceled
+  /// mouth pixel delta on the landmark-stabilized face box.
   static void _updateLipActivity(
     _SpeakerTrack track,
     Face face,
     ui.Rect box, {
+    required double imgWidth,
+    required double imgHeight,
     required double nx0,
     required double ny0,
     required double nx1,
@@ -1286,70 +1437,189 @@ class FaceDetectionService {
     required bool hasPrev,
     Uint8List? currGrid,
     Uint8List? prevGrid,
+    int gridW = silhouetteGridWidth,
+    int gridH = silhouetteGridHeight,
+    required double nowSec,
   }) {
+    // Stabilize the face box using rigid skull landmarks (eyes + nose) and
+    // smoothed box dimensions so ML Kit bounding-box padding jitter never
+    // shifts the mouth sampling window onto a beard or collar.
+    final fw = nx1 - nx0;
+    final fh = ny1 - ny0;
+    final stabW = hasPrev && track.normW > 0 ? 0.68 * track.normW + 0.32 * fw : fw;
+    final stabH = hasPrev && track.normH > 0 ? 0.68 * track.normH + 0.32 * fh : fh;
+    var centerX = (nx0 + nx1) * 0.5;
+    var centerY = (ny0 + ny1) * 0.5;
+    final leftEye = face.landmarks[FaceLandmarkType.leftEye]?.position;
+    final rightEye = face.landmarks[FaceLandmarkType.rightEye]?.position;
+    final nose = face.landmarks[FaceLandmarkType.noseBase]?.position;
+    if (leftEye != null && rightEye != null && nose != null &&
+        imgWidth > 0 && imgHeight > 0) {
+      final eyeCx = (leftEye.x + rightEye.x) * 0.5 / imgWidth;
+      final eyeCy = (leftEye.y + rightEye.y) * 0.5 / imgHeight;
+      final noseX = nose.x / imgWidth;
+      final noseY = nose.y / imgHeight;
+      centerX = (0.45 * eyeCx + 0.55 * noseX).clamp(0.0, 1.0);
+      centerY = (0.35 * eyeCy + 0.65 * noseY).clamp(0.0, 1.0);
+    }
+    final stabNx0 = (centerX - stabW * 0.5).clamp(0.0, 1.0);
+    final stabNy0 = (centerY - stabH * 0.5).clamp(0.0, 1.0);
+    final stabNx1 = (centerX + stabW * 0.5).clamp(0.0, 1.0);
+    final stabNy1 = (centerY + stabH * 0.5).clamp(0.0, 1.0);
+
     final metrics = _lipMetrics(face, box);
     final open = metrics.$1;
     final width = metrics.$2;
 
-    var delta = 0.0;
+    var geomDelta = 0.0;
     if (open != null) {
       final previous = track.lastOpen;
       if (hasPrev && previous != null) {
-        final dOpen = max(0.0, (open - previous).abs() - 0.006);
-        delta += dOpen * 4.5;
+        final dOpen = max(0.0, (open - previous).abs() - 0.010);
+        geomDelta += dOpen * 2.2;
       }
       track.lastOpen = open;
-      if (!hasPrev) track.lastOpen = open; // reset anchor, no diff
     }
     if (width != null) {
       final previous = track.lastWidth;
       if (hasPrev && previous != null) {
-        final dWidth = max(0.0, (width - previous).abs() - 0.006);
-        delta += dWidth * 2.5;
+        final dWidth = max(0.0, (width - previous).abs() - 0.010);
+        geomDelta += dWidth * 1.4;
       }
       track.lastWidth = width;
     }
-    // Classification articulation: speaking moves mouth corners continuously.
-    final smile = face.smilingProbability;
-    if (smile != null) {
-      final prevSmile = track.lastSmile;
-      if (hasPrev && prevSmile != null) {
-        final dSmile = max(0.0, (smile - prevSmile).abs() - 0.015);
-        delta += dSmile * 1.8;
-      }
-      track.lastSmile = smile;
-    }
-    // Direct pixel mouth-region luma delta (works on ALL faces, not just the
-    // largest, since contours are disabled).
-    if (hasPrev && currGrid != null && prevGrid != null) {
-      delta += computeMouthRegionDelta(
-            prevGrid,
-            currGrid,
-            silhouetteGridWidth,
-            silhouetteGridHeight,
-            nx0: nx0,
-            ny0: ny0,
-            nx1: nx1,
-            ny1: ny1,
-            prevNx0: prevNx0,
-            prevNy0: prevNy0,
-            prevNx1: prevNx1,
-            prevNy1: prevNy1,
-          ) *
-          3.5;
+    // Dampen landmark jitter when the whole head is moving/nodding rapidly.
+    if (track.lastMoveDelta > 0.020) {
+      geomDelta *= 0.25;
     }
 
-    track.lipDeltas.add(delta);
-    if (track.lipDeltas.length > lipWindow) {
-      track.lipDeltas.removeAt(0);
+    var pixelDelta = 0.0;
+    if (currGrid != null && currGrid.length >= gridW * gridH * 4) {
+      final currContrast = _mouthToCheekContrast(
+        currGrid,
+        gridW,
+        gridH,
+        nx0: stabNx0,
+        ny0: stabNy0,
+        nx1: stabNx1,
+        ny1: stabNy1,
+      );
+      final prevContrast = track.lastMouthContrast;
+      track.lastMouthContrast = currContrast;
+
+      if (hasPrev && prevGrid != null) {
+        final regionDelta = computeMouthRegionDelta(
+          prevGrid,
+          currGrid,
+          gridW,
+          gridH,
+          nx0: stabNx0,
+          ny0: stabNy0,
+          nx1: stabNx1,
+          ny1: stabNy1,
+          prevNx0: prevNx0,
+          prevNy0: prevNy0,
+          prevNx1: prevNx1,
+          prevNy1: prevNy1,
+        );
+        final contrastDelta = prevContrast != null
+            ? max(0.0, (currContrast - prevContrast).abs() - 0.008)
+            : 0.0;
+        pixelDelta = regionDelta * 3.8 + contrastDelta * 2.2;
+      }
     }
+
+    track
+      ..stabNx0 = stabNx0
+      ..stabNy0 = stabNy0
+      ..stabNx1 = stabNx1
+      ..stabNy1 = stabNy1;
+
+    final delta = geomDelta + pixelDelta;
+    track.recordSpeechSample(delta, nowSec: nowSec, window: lipWindow);
+  }
+
+  /// Within-frame contrast between the upper cheeks/nose bridge and the inner
+  /// mouth cavity (normalized to 0..1). Static beards have constant contrast
+  /// across frames, whereas an opening/closing mouth modulates this value on
+  /// every syllable.
+  static double _mouthToCheekContrast(
+    Uint8List grid,
+    int gridW,
+    int gridH, {
+    required double nx0,
+    required double ny0,
+    required double nx1,
+    required double ny1,
+  }) {
+    final fw = nx1 - nx0;
+    final fh = ny1 - ny0;
+    if (fw <= 0 || fh <= 0) return 0;
+
+    var cheekSum = 0.0;
+    var mouthSum = 0.0;
+    const n = 4;
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        final u = (c + 0.5) / n;
+        final v = (r + 0.5) / n;
+        cheekSum += _sampleLumaBilinear(
+          grid,
+          gridW,
+          gridH,
+          nx0 + fw * (0.28 + 0.44 * u),
+          ny0 + fh * (0.24 + 0.20 * v),
+        );
+        mouthSum += _sampleLumaBilinear(
+          grid,
+          gridW,
+          gridH,
+          nx0 + fw * (0.34 + 0.32 * u),
+          ny0 + fh * (0.64 + 0.18 * v),
+        );
+      }
+    }
+    return ((cheekSum - mouthSum) / (n * n)) / 255.0;
+  }
+
+  /// Bilinear luma lookup on an RGBA grid so sub-cell face-box movements
+  /// interpolate smoothly instead of snapping across 12-pixel grid boundaries.
+  static double _sampleLumaBilinear(
+    Uint8List grid,
+    int gridW,
+    int gridH,
+    double normX,
+    double normY,
+  ) {
+    final gx = (normX * gridW - 0.5).clamp(0.0, (gridW - 1).toDouble());
+    final gy = (normY * gridH - 0.5).clamp(0.0, (gridH - 1).toDouble());
+    final x0 = gx.floor();
+    final y0 = gy.floor();
+    final x1 = min(x0 + 1, gridW - 1);
+    final y1 = min(y0 + 1, gridH - 1);
+    final fx = gx - x0;
+    final fy = gy - y0;
+
+    int lumaAt(int x, int y) {
+      final o = (y * gridW + x) * 4;
+      return (77 * grid[o] + 150 * grid[o + 1] + 29 * grid[o + 2]) >> 8;
+    }
+
+    final l00 = lumaAt(x0, y0);
+    final l10 = lumaAt(x1, y0);
+    final l01 = lumaAt(x0, y1);
+    final l11 = lumaAt(x1, y1);
+    final top = l00 + (l10 - l00) * fx;
+    final bottom = l01 + (l11 - l01) * fx;
+    return top + (bottom - top) * fy;
   }
 
   /// Pure helper: mean absolute luma difference inside the face's
   /// lower-central mouth box (`x: [0.25..0.75]`, `y: [0.58..0.88]` of face
-  /// width/height), sampled on a 6x4 sub-grid in BOTH the current and the
-  /// previous frame's face box so rigid head translation does not fake mouth
-  /// motion. Returns the difference divided by 255.0.
+  /// width/height) MINUS the rigid upper-face motion (`y: [0.16..0.44]`),
+  /// sampled with bilinear interpolation in BOTH the current and the previous
+  /// frame's face box so head nodding, camera shake, and beard edges do not
+  /// fake mouth motion. Returns the difference divided by 255.0.
   static double computeMouthRegionDelta(
     Uint8List? prevGrid,
     Uint8List? currGrid,
@@ -1369,18 +1639,24 @@ class FaceDetectionService {
         currGrid.length < gridW * gridH * 4) {
       return 0;
     }
-    final cx0 = nx0 + (nx1 - nx0) * 0.25;
-    final cx1 = nx0 + (nx1 - nx0) * 0.75;
-    final cy0 = ny0 + (ny1 - ny0) * 0.58;
-    final cy1 = ny0 + (ny1 - ny0) * 0.88;
-    final px0 = prevNx0 + (prevNx1 - prevNx0) * 0.25;
-    final px1 = prevNx0 + (prevNx1 - prevNx0) * 0.75;
-    final py0 = prevNy0 + (prevNy1 - prevNy0) * 0.58;
-    final py1 = prevNy0 + (prevNy1 - prevNy0) * 0.88;
+    final fw = nx1 - nx0;
+    final fh = ny1 - ny0;
+    final pfw = prevNx1 - prevNx0;
+    final pfh = prevNy1 - prevNy0;
+    if (fw <= 0 || fh <= 0 || pfw <= 0 || pfh <= 0) return 0;
+
+    final cx0 = nx0 + fw * 0.25;
+    final cx1 = nx0 + fw * 0.75;
+    final cy0 = ny0 + fh * 0.58;
+    final cy1 = ny0 + fh * 0.88;
+    final px0 = prevNx0 + pfw * 0.25;
+    final px1 = prevNx0 + pfw * 0.75;
+    final py0 = prevNy0 + pfh * 0.58;
+    final py1 = prevNy0 + pfh * 0.88;
 
     const cols = 6;
     const rows = 4;
-    var sum = 0.0;
+    var mouthSum = 0.0;
     var n = 0;
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < cols; c++) {
@@ -1388,34 +1664,49 @@ class FaceDetectionService {
         final ty = cy0 + (cy1 - cy0) * (r + 0.5) / rows;
         final px = px0 + (px1 - px0) * (c + 0.5) / cols;
         final py = py0 + (py1 - py0) * (r + 0.5) / rows;
-        final gxi = (tx * gridW).floor().clamp(0, gridW - 1);
-        final gyi = (ty * gridH).floor().clamp(0, gridH - 1);
-        final gxp = (px * gridW).floor().clamp(0, gridW - 1);
-        final gyp = (py * gridH).floor().clamp(0, gridH - 1);
-        final currLuma = (77 * currGrid[gyi * gridW * 4 + gxi * 4] +
-                150 * currGrid[gyi * gridW * 4 + gxi * 4 + 1] +
-                29 * currGrid[gyi * gridW * 4 + gxi * 4 + 2]) >>
-            8;
-        final prevLuma = (77 * prevGrid[gyp * gridW * 4 + gxp * 4] +
-                150 * prevGrid[gyp * gridW * 4 + gxp * 4 + 1] +
-                29 * prevGrid[gyp * gridW * 4 + gxp * 4 + 2]) >>
-            8;
-        sum += (currLuma - prevLuma).abs();
+        final currLuma = _sampleLumaBilinear(currGrid, gridW, gridH, tx, ty);
+        final prevLuma = _sampleLumaBilinear(prevGrid, gridW, gridH, px, py);
+        mouthSum += (currLuma - prevLuma).abs();
         n++;
       }
     }
-    return n == 0 ? 0.0 : max(0.0, (sum / n) / 255.0 - 0.0065);
+    if (n == 0) return 0.0;
+    final mouthDiff = (mouthSum / n) / 255.0;
+
+    // Rigid upper-face reference (forehead / eye bridge / upper cheeks):
+    // moves during head nods, head turns, and camera shake, but stays still
+    // during pure lip articulation.
+    final ucy0 = ny0 + fh * 0.16;
+    final ucy1 = ny0 + fh * 0.44;
+    final upy0 = prevNy0 + pfh * 0.16;
+    final upy1 = prevNy0 + pfh * 0.44;
+    var upperSum = 0.0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        final tx = cx0 + (cx1 - cx0) * (c + 0.5) / cols;
+        final ty = ucy0 + (ucy1 - ucy0) * (r + 0.5) / rows;
+        final px = px0 + (px1 - px0) * (c + 0.5) / cols;
+        final py = upy0 + (upy1 - upy0) * (r + 0.5) / rows;
+        final currLuma = _sampleLumaBilinear(currGrid, gridW, gridH, tx, ty);
+        final prevLuma = _sampleLumaBilinear(prevGrid, gridW, gridH, px, py);
+        upperSum += (currLuma - prevLuma).abs();
+      }
+    }
+    final upperDiff = (upperSum / n) / 255.0;
+    final netDiff = max(0.0, mouthDiff - 0.82 * upperDiff);
+    return max(0.0, netDiff - 0.0065);
   }
 
-  /// Relative lip gap / mouth width for one face, each normalized by the face
-  /// box so a silent head movement cannot out-score a moving mouth.
+  /// Relative lip gap / mouth width for one face, normalized by mouth width
+  /// (MAR) and rigid eye-to-nose height so head nodding cannot out-score a
+  /// moving mouth.
   static (double?, double?) _lipMetrics(Face face, ui.Rect box) {
     final height = box.height > 0 ? box.height : 1.0;
     final width = box.width > 0 ? box.width : 1.0;
 
     double? open;
 
-    // Contour-based lip gap (most accurate when available).
+    // Contour-based lip gap (when available).
     final upperLip = face.contours[FaceContourType.upperLipBottom]?.points;
     final lowerLip = face.contours[FaceContourType.lowerLipTop]?.points;
     if (upperLip != null &&
@@ -1429,28 +1720,44 @@ class FaceDetectionService {
       open = (lowerY - upperY).abs() / height;
     }
 
-    // Landmark-based fallback: bottom of the mouth relative to the nose base.
-    if (open == null) {
-      final bottom = face.landmarks[FaceLandmarkType.bottomMouth]?.position;
-      final nose = face.landmarks[FaceLandmarkType.noseBase]?.position;
-      if (bottom != null && nose != null) {
-        open = (bottom.y - nose.y).abs() / height;
-      }
-    }
-
-    double? mouthWidth;
     final left = face.landmarks[FaceLandmarkType.leftMouth]?.position;
     final right = face.landmarks[FaceLandmarkType.rightMouth]?.position;
+    final bottom = face.landmarks[FaceLandmarkType.bottomMouth]?.position;
+    final nose = face.landmarks[FaceLandmarkType.noseBase]?.position;
+    final leftEye = face.landmarks[FaceLandmarkType.leftEye]?.position;
+    final rightEye = face.landmarks[FaceLandmarkType.rightEye]?.position;
+
+    double? mouthWidth;
     if (left != null && right != null) {
       mouthWidth = (right.x - left.x).abs() / width;
+    }
+
+    // Landmark-based Mouth Aspect Ratio (MAR) + pitch-compensated jaw drop.
+    if (open == null) {
+      if (bottom != null && left != null && right != null) {
+        final cornersMidY = (left.y + right.y) * 0.5;
+        final mwPx = max(width * 0.18, (right.x - left.x).abs());
+        final mar = max(0.0, bottom.y - cornersMidY) / mwPx;
+        if (nose != null && leftEye != null && rightEye != null) {
+          final eyeMidY = (leftEye.y + rightEye.y) * 0.5;
+          final rigidUpperH = max(height * 0.18, (nose.y - eyeMidY).abs());
+          final jawRatio = (bottom.y - nose.y).abs() / rigidUpperH;
+          open = mar * 0.45 + jawRatio * 0.25;
+        } else {
+          open = mar * 0.55;
+        }
+      } else if (bottom != null && nose != null) {
+        open = (bottom.y - nose.y).abs() / height;
+      }
     }
 
     return (open, mouthWidth);
   }
 
   /// Associates a detected face with an existing track by **box IoU**, then by
-  /// normalized center distance. Stale tracks (invisible for a while) are not
-  /// re-matched, so a new shot does not hijack an old person's history.
+  /// normalized center distance. Tracks already claimed in the current frame
+  /// (`track.lastSeenSec == nowSec`) are skipped so two faces in one frame can
+  /// never collide on the same track.
   static _SpeakerTrack? _associateFace(
     Map<int, _SpeakerTrack> tracks, {
     required double nowSec,
@@ -1467,7 +1774,8 @@ class FaceDetectionService {
     _SpeakerTrack? best;
     var bestIou = minFaceOverlap;
     for (final track in tracks.values) {
-      if (track.isSilhouette) continue; // never hijack a silhouette track with a face
+      if (track.isSilhouette) continue;
+      if (track.lastSeenSec == nowSec) continue; // already matched in this frame
       if (nowSec - track.lastSeenSec > 2.5) continue;
       final iou = _boxOverlap(track, nx0, ny0, nx1, ny1);
       if (iou > bestIou) {
@@ -1481,6 +1789,7 @@ class FaceDetectionService {
     var bestDistance = associationDistance;
     for (final track in tracks.values) {
       if (track.isSilhouette) continue;
+      if (track.lastSeenSec == nowSec) continue; // already matched in this frame
       if (nowSec - track.lastSeenSec > 2.5) continue;
       final dx = track.normX - cx;
       final dy = track.normY - cy;
@@ -1517,10 +1826,16 @@ class FaceDetectionService {
     return union > 0 ? intersection / union : 0;
   }
 
-  /// Picks the active speaker with responsive switching: a face that leaves
-  /// the frame releases the lock immediately; otherwise switch once the lock
-  /// (0.5s) elapses OR instantly when the current speaker is silent and a
-  /// candidate is clearly speaking.
+  /// Picks the active speaker with sustained-speech hysteresis:
+  ///  - if the currently selected person has never spoken in this scene (e.g.
+  ///    frame 0 after a scene cut picked a silent bystander), switch in 0ms as
+  ///    soon as any candidate starts speaking;
+  ///  - once a speaker is actively talking, hold the camera on them across
+  ///    natural ~1.1s breath pauses between words;
+  ///  - switch to a new speaker when the candidate has confirmed speech across
+  ///    multiple samples (`speakingFrames >= 2`) and either the current
+  ///    speaker has paused for >= 1.0s or the lock has elapsed with a clear
+  ///    speech lead.
   static _SpeakerTrack? _selectSpeaker(
     List<_SpeakerTrack> present,
     _SpeakerTrack? current, {
@@ -1531,16 +1846,39 @@ class FaceDetectionService {
     if (current != null && present.contains(current)) {
       current.lockStartSec ??= nowSec;
       final lockedFor = nowSec - (current.lockStartSec ?? nowSec);
+      final sinceCurrentSpoke = nowSec - current.lastSpokeSec;
 
       var best = current;
       for (final candidate in present) {
         if (candidate.score > best.score) best = candidate;
       }
       if (!identical(best, current)) {
-        final immediateSwitch = current.recentActivity < 0.012 &&
-            best.recentActivity >= 0.028;
-        if ((lockedFor >= speakerLockSeconds || immediateSwitch) &&
-            best.score > current.score * 1.12 + 0.008) {
+        final bestConfirmed = (!best.isSilhouette &&
+                best.speakingFrames >= 2 &&
+                best.recentActivity >= 0.016) ||
+            (best.isSilhouette && best.silhouetteActivity >= 0.045);
+
+        // Fast initial lock acquisition: if the initial track picked at the
+        // start of a scene has not spoken at all, snap immediately to the
+        // first person who starts talking.
+        final currentNeverSpoke = !current.isSilhouette &&
+            current.lastSpokeSec < 0 &&
+            current.speakingFrames == 0;
+        final bestStartedSpeaking = (!best.isSilhouette &&
+                best.speakingFrames >= 1 &&
+                best.recentActivity >= 0.015) ||
+            (best.isSilhouette && best.silhouetteActivity >= 0.045);
+        if (currentNeverSpoke && bestStartedSpeaking) {
+          best.lockStartSec = nowSec;
+          return best;
+        }
+
+        // Turn-taking switch once the candidate has sustained speech.
+        final currentPaused = sinceCurrentSpoke >= 1.0 || current.silentFrames >= 4;
+        if (bestConfirmed &&
+            ((currentPaused && best.score > current.score * 1.15 + 0.008) ||
+                (lockedFor >= speakerLockSeconds &&
+                    best.score > current.score * 1.40 + 0.014))) {
           best.lockStartSec = nowSec;
           return best;
         }
@@ -1548,8 +1886,6 @@ class FaceDetectionService {
       return current;
     }
 
-    // The current speaker is gone from this frame (incl. after a scene cut):
-    // switch right away.
     _SpeakerTrack? best;
     for (final candidate in present) {
       if (best == null || candidate.score > best.score) best = candidate;
@@ -1787,12 +2123,16 @@ class FaceDetectionService {
         continue;
       }
 
-      // Genuine travel across one shot: keep smooth intermediate keyframes,
-      // but the segment ENTRY is always an instant cut.
-      final budget = max(2, (available * (end - start)) ~/ total);
+      // Genuine travel across one shot: keep smooth intermediate keyframes
+      // (`isCut: false` so the camera pans with the speaker), while the
+      // segment ENTRY is an instant cut.
+      final budget = max(3, (available * (end - start)) ~/ total);
       final simplified = _simplifySegment(segment, budget);
       if (simplified.isNotEmpty) {
         simplified[0] = simplified.first.copyWith(isCut: true);
+        for (var k = 1; k < simplified.length; k++) {
+          simplified[k] = simplified[k].copyWith(isCut: false);
+        }
       }
       out.addAll(simplified);
     }
@@ -1826,14 +2166,15 @@ class FaceDetectionService {
   ///
   /// 1. an explicit `b.isCut` always wins;
   /// 2. a **manual** keyframe with `isCut == false` is a deliberate smooth
-  ///    override (the user pressed "Smooth"), so heuristics never re-cut it;
-  /// 3. otherwise a very fast (`<= 0.05s`) or large (`>= 0.12` in X) jump is
-  ///    treated as a cut — nobody pans through an empty wall that fast.
+  ///    camera pan, so heuristics never re-cut it;
+  /// 3. otherwise only a sub-50ms step or a cross-screen jump (`>= 0.35`)
+  ///    without explicit flags is treated as a cut — preserving smooth camera
+  ///    tracking within a speaker's shot.
   static bool isEffectiveCut(FaceTrackPoint a, FaceTrackPoint b) {
     if (b.isCut) return true;
     if (b.isManual) return false;
     if (b.timeSec - a.timeSec <= 0.05) return true;
-    return (b.normX - a.normX).abs() >= 0.12;
+    return (b.normX - a.normX).abs() >= 0.35;
   }
 
   /// Expands every effective cut into an explicit **1ms step pair**:
@@ -1871,7 +2212,8 @@ class FaceDetectionService {
   /// Prepares raw AI keyframes for the interactive editor:
   ///  - folds synthetic `t-0.001` step helpers into single logical keyframes
   ///    carrying `isCut: true` (the user sees clean, editable keyframes);
-  ///  - guarantees every jump `>= 0.10` in X or Y is flagged `isCut: true`.
+  ///  - preserves smooth intra-shot camera-follow keyframes (`isCut: false`),
+  ///    flagging only unflagged cross-screen jumps (`>= 0.35`) as cuts.
   static List<FaceTrackPoint> normalizeKeyframesForEditing(
     List<FaceTrackPoint> keyframes,
   ) {
@@ -1900,9 +2242,11 @@ class FaceDetectionService {
       var point = cleaned[i];
       if (i > 0) {
         final previous = out.last;
-        final jump = (point.normX - previous.normX).abs() >= 0.10 ||
-            (point.normY - previous.normY).abs() >= 0.10;
-        if (jump && !point.isCut) point = point.copyWith(isCut: true);
+        final jump = (point.normX - previous.normX).abs() >= 0.35 ||
+            (point.normY - previous.normY).abs() >= 0.35;
+        if (jump && !point.isCut && !point.isManual) {
+          point = point.copyWith(isCut: true);
+        }
       }
       out.add(point);
     }
@@ -1911,51 +2255,115 @@ class FaceDetectionService {
 
   /// Adds a manual keyframe at [timeSec], or updates the nearest existing one
   /// within [tolerance] seconds in place (position + `isManual: true`, time
-  /// unchanged). New keyframes are inserted in sorted time order with
-  /// `isCut: true` and `isManual: true`.
+  /// unchanged).
+  ///
+  /// When [clearNearbyAiKeyframes] is `true` (interactive camera dragging in
+  /// the editor), any non-manual AI keyframes within ±0.75s or trailing smooth
+  /// AI points in the same shot are absorbed so old AI points never snap the
+  /// camera back after the user's manual camera adjustment.
   static List<FaceTrackPoint> upsertManualKeyframe(
     List<FaceTrackPoint> keyframes, {
     required double timeSec,
     required double normX,
     required double normY,
     double tolerance = manualKeyframeToleranceSec,
+    bool isCut = true,
+    bool clearNearbyAiKeyframes = false,
   }) {
+    var working = List<FaceTrackPoint>.of(keyframes);
+
     var bestIndex = -1;
     var bestDelta = double.infinity;
-    for (var i = 0; i < keyframes.length; i++) {
-      final delta = (keyframes[i].timeSec - timeSec).abs();
-      if (delta <= tolerance && delta < bestDelta) {
+    final effectiveTolerance =
+        clearNearbyAiKeyframes ? max(tolerance, 0.45) : tolerance;
+    for (var i = 0; i < working.length; i++) {
+      final delta = (working[i].timeSec - timeSec).abs();
+      if (delta <= effectiveTolerance && delta < bestDelta) {
         bestDelta = delta;
         bestIndex = i;
       }
     }
 
-    final out = List<FaceTrackPoint>.of(keyframes);
     if (bestIndex >= 0) {
-      out[bestIndex] = out[bestIndex].copyWith(
+      final existing = working[bestIndex];
+      // Keep shot-start cut if editing the very first keyframe of the clip;
+      // otherwise use the caller's smooth/cut preference when clearing AI KFs.
+      final resolvedCut = clearNearbyAiKeyframes
+          ? (bestIndex == 0 ? true : isCut)
+          : existing.isCut;
+      working[bestIndex] = existing.copyWith(
         normX: normX,
         normY: normY,
+        isCut: resolvedCut,
         isManual: true,
       );
-      return out;
+      if (clearNearbyAiKeyframes) {
+        working = _pruneConflictingAiKeyframes(working, bestIndex);
+      }
+      return working;
     }
 
     final point = FaceTrackPoint(
       timeSec: timeSec,
       normX: normX,
       normY: normY,
-      isCut: true,
+      isCut: isCut,
       isManual: true,
     );
-    var insertAt = out.length;
-    for (var i = 0; i < out.length; i++) {
-      if (out[i].timeSec > timeSec) {
+    var insertAt = working.length;
+    for (var i = 0; i < working.length; i++) {
+      if (working[i].timeSec > timeSec) {
         insertAt = i;
         break;
       }
     }
-    out.insert(insertAt, point);
-    return out;
+    working.insert(insertAt, point);
+    if (clearNearbyAiKeyframes) {
+      working = _pruneConflictingAiKeyframes(working, insertAt);
+    }
+    return working;
+  }
+
+  /// Removes non-manual AI keyframes that sit right next to [manualIndex]
+  /// (within 0.75s) or trailing intra-shot AI points (`!isCut && !isManual`)
+  /// immediately following [manualIndex], so the camera smoothly follows the
+  /// user's manual trajectory without snapping back to old AI drift points.
+  static List<FaceTrackPoint> _pruneConflictingAiKeyframes(
+    List<FaceTrackPoint> keyframes,
+    int manualIndex,
+  ) {
+    if (keyframes.length <= 1 ||
+        manualIndex < 0 ||
+        manualIndex >= keyframes.length) {
+      return keyframes;
+    }
+    final targetTime = keyframes[manualIndex].timeSec;
+    final out = <FaceTrackPoint>[];
+    var passedManual = false;
+    var hitNextShotOrManual = false;
+
+    for (var i = 0; i < keyframes.length; i++) {
+      if (i == manualIndex) {
+        out.add(keyframes[i]);
+        passedManual = true;
+        continue;
+      }
+      final kf = keyframes[i];
+      if (!kf.isManual && i > 0 && (kf.timeSec - targetTime).abs() <= 0.75) {
+        continue;
+      }
+      if (passedManual && !hitNextShotOrManual) {
+        if (kf.isManual || kf.isCut) {
+          hitNextShotOrManual = true;
+        } else {
+          // Trailing non-manual intra-shot AI point: drop it so it doesn't
+          // pull the camera away from the user's manual position.
+          continue;
+        }
+      }
+      out.add(kf);
+    }
+    return out.isEmpty ? [keyframes[manualIndex]] : out;
   }
 
   /// Deletes the keyframe at [index]. Keeps at least one keyframe so the
@@ -2002,10 +2410,9 @@ class FaceDetectionService {
     return out;
   }
 
-  /// Splits the timeline wherever the raw center jumps by >= [threshold] in X
-  /// or Y — a speaker switch or a hard cut, never gradual camera motion — or
-  /// wherever the person was invisible for a while (a time gap means a new
-  /// shot too; smoothing across it would crawl through empty space).
+  /// Splits the timeline wherever an explicit speaker/scene cut occurred
+  /// (`rawPoints[i].isCut`), wherever the raw center jumps by >= [threshold]
+  /// in X or Y, or wherever there is a time gap > 1.5s.
   static List<(int, int)> _splitSegments(
     List<FaceTrackPoint> rawPoints,
     double threshold,
@@ -2016,7 +2423,7 @@ class FaceDetectionService {
       final dx = (rawPoints[i].normX - rawPoints[i - 1].normX).abs();
       final dy = (rawPoints[i].normY - rawPoints[i - 1].normY).abs();
       final gap = rawPoints[i].timeSec - rawPoints[i - 1].timeSec;
-      if (dx >= threshold || dy >= threshold || gap > 1.5) {
+      if (rawPoints[i].isCut || dx >= threshold || dy >= threshold || gap > 1.5) {
         ranges.add((start, i));
         start = i;
       }

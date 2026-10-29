@@ -1502,6 +1502,90 @@ void main() {
       expect(locked.copyWith(selectedSpeakerId: null).selectedSpeakerId, isNull);
       expect(locked.frameFill, 1.0);
     });
+
+    test('rigid whole-face luma shift (nodding bystander) is canceled out by upper-face reference', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final prev = Uint8List(w * h * 4);
+      final curr = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        prev[i * 4] = 100;
+        prev[i * 4 + 1] = 100;
+        prev[i * 4 + 2] = 100;
+        prev[i * 4 + 3] = 255;
+        // Whole frame / whole face shifts by +20 gray levels (rigid nod/lighting)
+        curr[i * 4] = 120;
+        curr[i * 4 + 1] = 120;
+        curr[i * 4 + 2] = 120;
+        curr[i * 4 + 3] = 255;
+      }
+      final delta = FaceDetectionService.computeMouthRegionDelta(
+        prev,
+        curr,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+      // Rigid whole-face change is canceled by the upper-face subtraction
+      expect(delta, lessThan(0.01));
+    });
+
+    test('moderate speaker movement (10% of frame) pans smoothly like a camera without cutting', () {
+      // Speaker moves from x=0.44 to x=0.56 over 12 samples (dx=0.01 per frame):
+      // total travel is 0.12 (> shotSteadyTolerance 0.04, < 0.35), so the
+      // camera must follow smoothly (isCut: false) and never turn into a cut.
+      final raw = List<FaceTrackPoint>.generate(13, (i) {
+        return FaceTrackPoint(
+          timeSec: i * 0.25,
+          normX: 0.44 + i * 0.01,
+          normY: 0.45,
+        );
+      });
+
+      final built = FaceDetectionService.buildKeyframes(raw);
+      final normalized = FaceDetectionService.normalizeKeyframesForEditing(built);
+      expect(normalized.length, greaterThanOrEqualTo(2));
+      expect(normalized.skip(1).any((k) => k.isCut), isFalse);
+
+      final materialized =
+          FaceDetectionService.materializeKeyframesForFfmpeg(normalized);
+      // Smooth camera follow: no synthetic 1ms cut helpers added.
+      expect(materialized.length, normalized.length);
+    });
+
+    test('interactive camera drag creates smooth keyframe and prunes conflicting AI points', () {
+      const aiKeyframes = [
+        FaceTrackPoint(timeSec: 0.0, normX: 0.3, normY: 0.45, isCut: true),
+        FaceTrackPoint(timeSec: 1.5, normX: 0.32, normY: 0.45, isCut: false),
+        FaceTrackPoint(timeSec: 3.0, normX: 0.35, normY: 0.45, isCut: false),
+        FaceTrackPoint(timeSec: 6.0, normX: 0.75, normY: 0.45, isCut: true),
+      ];
+
+      final edited = FaceDetectionService.upsertManualKeyframe(
+        aiKeyframes,
+        timeSec: 1.4,
+        normX: 0.65,
+        normY: 0.45,
+        isCut: false,
+        clearNearbyAiKeyframes: true,
+      );
+
+      // The nearby 1.5s AI keyframe is updated to a smooth manual keyframe at
+      // x=0.65, the trailing 3.0s intra-shot AI point is pruned so the camera
+      // does not snap back to 0.35, and the next shot cut at 6.0s is preserved.
+      expect(edited.length, 3);
+      expect(edited[1].normX, closeTo(0.65, 1e-9));
+      expect(edited[1].isCut, isFalse);
+      expect(edited[1].isManual, isTrue);
+      expect(edited[2].timeSec, closeTo(6.0, 1e-9));
+    });
   });
 }
 
