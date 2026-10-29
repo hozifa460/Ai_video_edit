@@ -1586,6 +1586,49 @@ void main() {
       expect(edited[1].isManual, isTrue);
       expect(edited[2].timeSec, closeTo(6.0, 1e-9));
     });
+
+    test('computeAudioVisualSyncScore rewards synchronized lip-voice modulation and rejects silent nodding', () {
+      const audioMod = [0.65, 0.72, 0.68, 0.75];
+      const syncedMouth = [0.025, 0.032, 0.028, 0.035];
+      const silentMouth = [0.001, 0.001, 0.001, 0.001];
+
+      final syncScore = FaceDetectionService.computeAudioVisualSyncScore(
+        mouthHistory: syncedMouth,
+        audioModHistory: audioMod,
+      );
+      final silentScore = FaceDetectionService.computeAudioVisualSyncScore(
+        mouthHistory: silentMouth,
+        audioModHistory: audioMod,
+      );
+
+      expect(syncScore, greaterThan(0.55));
+      expect(silentScore, equals(0.0));
+    });
+
+    test('buildKeyframesWithShotOverrides locks a specific shot onto a chosen speaker', () {
+      final raw = <FaceTrackPoint>[
+        for (var i = 0; i < 6; i++)
+          FaceTrackPoint(
+            timeSec: i * 0.25,
+            normX: 0.25,
+            normY: 0.45,
+            shotId: 0,
+            isCut: i == 0,
+            persons: const [
+              DetectedPersonCandidate(personId: 1, normX: 0.25, normY: 0.45),
+              DetectedPersonCandidate(personId: 2, normX: 0.78, normY: 0.48),
+            ],
+          ),
+      ];
+
+      final overridden = FaceDetectionService.buildKeyframesWithShotOverrides(
+        raw,
+        shotTargetOverrides: const {0: 2},
+      );
+
+      expect(overridden, isNotEmpty);
+      expect(overridden.first.normX, closeTo(0.78, 0.05));
+    });
   });
 }
 

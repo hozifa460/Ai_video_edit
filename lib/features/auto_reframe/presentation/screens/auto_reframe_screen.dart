@@ -14,15 +14,11 @@ import '../../../../core/utils/logger.dart';
 import '../../data/services/ffmpeg_auto_reframe_service.dart';
 import '../../domain/entities/reframe_config.dart';
 
-/// Standalone Auto Reframe studio: real ML Kit speaker tracking, per-shot
-/// speaker/target locking, smooth virtual camera keyframes, and FFmpeg render.
 class AutoReframeScreen extends StatefulWidget {
   final String videoPath;
 
   const AutoReframeScreen({super.key, required this.videoPath});
 
-  /// Pure clamp math (unit-tested): keeps the crop window fully inside the
-  /// source frame for the given effective output aspect.
   static (double, double) clampCenterForAspect(
     double normX,
     double normY,
@@ -47,7 +43,6 @@ class AutoReframeScreen extends StatefulWidget {
     );
   }
 
-  /// Pure drag-step math (unit-tested).
   static (double, double) dragStepCenter({
     required (double, double) origin,
     required double deltaXPx,
@@ -81,27 +76,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   FaceTrackResult? _track;
   FaceTrackResult? _effectiveTrack;
 
-  /// Shots / scenes in chronological order (from AI scene detection + any
-  /// custom user splits).
   List<SceneShot> _shots = const [];
-
-  /// Per-shot user tracking overrides (`shot.id -> ShotTrackingOverride`).
   final Map<int, ShotTrackingOverride> _shotOverrides =
       <int, ShotTrackingOverride>{};
 
-  /// AI-generated keyframes (normalized for editing) — the "Reset AI" base.
   List<FaceTrackPoint> _aiKeyframes = const [];
-
-  /// User-editable keyframe list driving preview + render.
   List<FaceTrackPoint> _workingKeyframes = const [];
 
   static const double magneticSnapPx = 12.0;
   double? _lastSnappedKfSec;
   (double, double)? _dragOrigin;
 
-  /// When true, the preview renders the live cropped 9:16 virtual camera
-  /// viewport (moving like a real camera) instead of a static 16:9 crop box.
   bool _cameraViewMode = true;
+  bool _showTapBoxesOnPreview = true;
 
   bool _analyzing = false;
   double _analysisProgress = 0;
@@ -186,7 +173,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     setState(() {
       _analyzing = true;
       _analysisProgress = 0;
-      _analysisStatus = 'Preparing face analysis...';
+      _analysisStatus = 'جاري تجهيز محرك التتبع الصوتي والبصري...';
     });
 
     final result = await FaceDetectionService.analyzeVideoFaceTrack(
@@ -220,7 +207,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 SceneShot(
                   id: 0,
                   startSec: 0,
-                  endSec: max(_durationSeconds, result.rawPoints.isNotEmpty ? result.rawPoints.last.timeSec : 1.0),
+                  endSec: max(
+                    _durationSeconds,
+                    result.rawPoints.isNotEmpty
+                        ? result.rawPoints.last.timeSec
+                        : 1.0,
+                  ),
                 ),
               ];
       }
@@ -228,9 +220,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  /// Resolves the camera trajectory from the global speaker lock AND any
-  /// per-shot overrides (`_shotOverrides`), then initializes the smooth
-  /// keyframe editor.
   void _recomputeEffectiveTrack() {
     final track = _track;
     if (track == null) {
@@ -295,10 +284,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     _workingKeyframes = List<FaceTrackPoint>.of(_aiKeyframes);
   }
 
-  // ---------------------------------------------------------------------------
-  // Per-Shot / Scene Lock Controls ("الثبات على المتكلم أو شخص معين أثناء لقطة معينة")
-  // ---------------------------------------------------------------------------
-
   int _currentShotIndexAt(double timeSec) {
     if (_shots.isEmpty) return -1;
     for (var i = 0; i < _shots.length; i++) {
@@ -313,9 +298,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return idx >= 0 && idx < _shots.length ? _shots[idx] : null;
   }
 
-  /// Splits the active shot at the current playhead timestamp so the user can
-  /// isolate any custom segment `[t1 .. t2]` and lock it onto a specific
-  /// speaker or static camera position.
   void _splitShotAtPlayhead() {
     if (_shots.isEmpty) {
       if (_durationSeconds <= 0.6) return;
@@ -366,7 +348,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     HapticFeedback.mediumImpact();
   }
 
-  /// Merges the current shot with the preceding shot (or next shot if at #0).
   void _mergeCurrentShot() {
     if (_shots.length <= 1) return;
     final idx = _currentShotIndexAt(_positionSeconds);
@@ -445,9 +426,39 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Manual keyframe editor
-  // ---------------------------------------------------------------------------
+  void _toggleTapLockOnPerson(DetectedSpeakerProfile profile) {
+    HapticFeedback.selectionClick();
+    final currentShot = _currentShotAt(_positionSeconds);
+    if (currentShot != null) {
+      final existing = _shotOverrides[currentShot.id];
+      final alreadyLocked = existing?.mode == ShotLockMode.specificPerson &&
+          existing?.speakerId == profile.id;
+      if (alreadyLocked) {
+        _setShotModeAutoSpeaker(currentShot);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '🎤 تم إلغاء القفل والعودة لتتبع المتكلم تلقائياً في هذه اللقطة',
+            ),
+            duration: Duration(milliseconds: 1300),
+          ),
+        );
+      } else {
+        _setShotModePerson(currentShot, profile.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '🔒 تم تثبيت اللقطة الحالية على ${profile.label}',
+            ),
+            duration: const Duration(milliseconds: 1300),
+          ),
+        );
+      }
+    } else {
+      final nextId = _config.selectedSpeakerId == profile.id ? null : profile.id;
+      _selectSpeaker(nextId);
+    }
+  }
 
   (double, double) _currentSampledPosition(double timeSec) {
     final keyframes = _workingKeyframes;
@@ -472,8 +483,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return best;
   }
 
-  /// Insert-or-update a manual camera keyframe at [timeSec].
-  /// Manual edits ALWAYS default to smooth camera motion (`isCut: false`).
   void _upsertManualKeyframeAt(double timeSec, double normX, double normY) {
     final currentShot = _currentShotAt(timeSec);
     final currentOverride =
@@ -630,8 +639,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  // --- Direct crop-box dragging ---------------------------------------------
-
   void _onCropPanStart() {
     final controller = _controller;
     if (controller != null && controller.value.isPlaying) controller.pause();
@@ -665,51 +672,53 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  static const double tapLockDistance = 0.12;
+  static const double tapLockDistance = 0.14;
 
-  /// Tapping a person on the preview locks the **current shot** onto that
-  /// person (or globally if no shots exist).
   bool _selectSpeakerNearTap(double normX, double normY) {
     final track = _track;
     if (track == null || track.speakers.isEmpty) return false;
     DetectedSpeakerProfile? nearest;
-    var bestDistance = double.infinity;
+    var bestScore = double.infinity;
+
     for (final profile in track.speakers) {
-      final (px, py) = _positionAt(profile.rawPoints, _positionSeconds);
+      final sample = _sampleProfileAt(profile, _positionSeconds);
+      final px = sample.normX;
+      final py = sample.normY;
+      final halfW = max(0.08, sample.normW * 0.85);
+      final halfH = max(0.12, sample.normH * 1.15);
+
+      final insideBox = (normX - px).abs() <= halfW &&
+          (normY >= py - halfH * 0.65 && normY <= py + halfH * 1.35);
       final dx = px - normX;
       final dy = py - normY;
-      final distance = dx * dx + dy * dy;
-      if (distance < bestDistance) {
-        bestDistance = distance;
+      final distSq = dx * dx + dy * dy;
+      final effScore = insideBox ? distSq * 0.25 : distSq;
+
+      if (effScore < bestScore &&
+          (insideBox || distSq < tapLockDistance * tapLockDistance)) {
+        bestScore = effScore;
         nearest = profile;
       }
     }
-    if (nearest == null ||
-        bestDistance >= tapLockDistance * tapLockDistance) {
-      return false;
-    }
-    final currentShot = _currentShotAt(_positionSeconds);
-    if (currentShot != null) {
-      _setShotModePerson(currentShot, nearest.id);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'تم تثبيت اللقطة الحالية على ${nearest.label}',
-          ),
-          duration: const Duration(milliseconds: 1400),
-        ),
-      );
-    } else {
-      _selectSpeaker(nearest.id);
-    }
+    if (nearest == null) return false;
+    _toggleTapLockOnPerson(nearest);
     return true;
   }
 
-  static (double, double) _positionAt(
-    List<FaceTrackPoint> points,
+  static FaceTrackPoint _sampleProfileAt(
+    DetectedSpeakerProfile profile,
     double timeSec,
   ) {
-    if (points.isEmpty) return (0.5, 0.42);
+    final points = profile.rawPoints;
+    if (points.isEmpty) {
+      return FaceTrackPoint(
+        timeSec: timeSec,
+        normX: profile.avgNormX,
+        normY: profile.avgNormY,
+        normW: profile.avgNormW,
+        normH: profile.avgNormH,
+      );
+    }
     var best = points.first;
     var bestDelta = double.infinity;
     for (final point in points) {
@@ -719,7 +728,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         best = point;
       }
     }
-    return (best.normX, best.normY);
+    return best;
   }
 
   List<ReframeFaceMarker> _faceMarkersAt(double timeSec) {
@@ -732,15 +741,43 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         shotOverride?.mode == ShotLockMode.specificPerson
             ? shotOverride?.speakerId
             : _config.selectedSpeakerId;
-    return [
-      for (final profile in track.speakers)
+
+    final (activeX, activeY) = track.sampleAt(timeSec);
+    int? aiActiveSpeakerId;
+    var bestDist = 0.09;
+    for (final profile in track.speakers) {
+      final pt = _sampleProfileAt(profile, timeSec);
+      if ((pt.timeSec - timeSec).abs() > 1.8) continue;
+      final d = sqrt(
+        (pt.normX - activeX) * (pt.normX - activeX) +
+            (pt.normY - activeY) * (pt.normY - activeY),
+      );
+      if (d < bestDist) {
+        bestDist = d;
+        aiActiveSpeakerId = profile.id;
+      }
+    }
+
+    final markers = <ReframeFaceMarker>[];
+    for (final profile in track.speakers) {
+      final pt = _sampleProfileAt(profile, timeSec);
+      final visibleNow = (pt.timeSec - timeSec).abs() <= 2.2;
+      if (!visibleNow && profile.id != lockedSpeakerId) continue;
+      markers.add(
         ReframeFaceMarker(
-          normX: _positionAt(profile.rawPoints, timeSec).$1,
-          normY: _positionAt(profile.rawPoints, timeSec).$2,
+          speakerId: profile.id,
+          normX: pt.normX,
+          normY: pt.normY,
+          normW: pt.normW > 0 ? pt.normW : profile.avgNormW,
+          normH: pt.normH > 0 ? pt.normH : profile.avgNormH,
           label: profile.label,
           locked: profile.id == lockedSpeakerId,
+          isSpeaking: profile.id == aiActiveSpeakerId || pt.isSpeaking,
+          hasVoiceFingerprint: profile.boundVoiceClusterId != null,
         ),
-    ];
+      );
+    }
+    return markers;
   }
 
   void _applyMotionPreset(CameraMotionPreset preset) {
@@ -905,7 +942,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            tooltip: 'Re-Analyze Face',
+            tooltip: 'إظهار/إخفاء مربعات اللمس على الفيديو (Tap-to-Track)',
+            onPressed: () => setState(
+              () => _showTapBoxesOnPreview = !_showTapBoxesOnPreview,
+            ),
+            icon: Icon(
+              _showTapBoxesOnPreview
+                  ? Icons.touch_app
+                  : Icons.touch_app_outlined,
+              color: _showTapBoxesOnPreview ? const Color(0xFF00E676) : null,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Re-Analyze Face & Voice',
             onPressed: _analyzing ? null : _analyzeFaces,
             icon: const Icon(Icons.face_retouching_natural),
           ),
@@ -1017,18 +1066,44 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 visualDensity: VisualDensity.compact,
               ),
             ),
-            IconButton.filledTonal(
-              visualDensity: VisualDensity.compact,
-              onPressed: () {
-                setState(() {
-                  controller.value.isPlaying
-                      ? controller.pause()
-                      : controller.play();
-                });
-              },
-              icon: Icon(
-                controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_track != null && _track!.speakers.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: Icon(
+                        Icons.touch_app,
+                        size: 15,
+                        color: _showTapBoxesOnPreview
+                            ? const Color(0xFF00E676)
+                            : Colors.white54,
+                      ),
+                      label: Text(
+                        _showTapBoxesOnPreview ? 'اللمس مفعل' : 'اللمس مخفي',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      onPressed: () => setState(
+                        () => _showTapBoxesOnPreview = !_showTapBoxesOnPreview,
+                      ),
+                    ),
+                  ),
+                IconButton.filledTonal(
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    setState(() {
+                      controller.value.isPlaying
+                          ? controller.pause()
+                          : controller.play();
+                    });
+                  },
+                  icon: Icon(
+                    controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1036,7 +1111,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         if (_cameraViewMode &&
             _config.style != AutoReframeStyle.blurBackgroundFrame) ...[
           Container(
-            height: 300,
+            height: 310,
             decoration: BoxDecoration(
               color: Colors.black,
               borderRadius: BorderRadius.circular(12),
@@ -1081,8 +1156,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     return GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onPanStart: (_) => _onCropPanStart(),
-                      // Dragging on the 9:16 camera viewport pans the camera
-                      // in natural direction (drag left/right to aim camera).
                       onPanUpdate: (details) => _onCropPanUpdate(
                         -details.delta.dx,
                         -details.delta.dy,
@@ -1090,6 +1163,22 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                         fullVideoH,
                       ),
                       onPanEnd: (_) => _onCropPanEnd(),
+                      onTapUp: (details) {
+                        if (activeW <= 0 || activeH <= 0) return;
+                        final padX = (canvasW - activeW) * 0.5;
+                        final padY = (canvasH - activeH) * 0.5;
+                        final localX =
+                            ((details.localPosition.dx - padX) / activeW)
+                                .clamp(0.0, 1.0);
+                        final localY =
+                            ((details.localPosition.dy - padY) / activeH)
+                                .clamp(0.0, 1.0);
+                        final srcTapX =
+                            ((cx - halfW) + localX * cropFracW).clamp(0.0, 1.0);
+                        final srcTapY =
+                            ((cy - halfH) + localY * cropFracH).clamp(0.0, 1.0);
+                        _selectSpeakerNearTap(srcTapX, srcTapY);
+                      },
                       child: Container(
                         color: Colors.black,
                         alignment: Alignment.center,
@@ -1107,6 +1196,18 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                                   height: fullVideoH,
                                   child: VideoPlayer(controller),
                                 ),
+                                if (_showTapBoxesOnPreview && faces.isNotEmpty)
+                                  ..._buildCameraViewTapBoxes(
+                                    faces: faces,
+                                    cx: cx,
+                                    cy: cy,
+                                    halfW: halfW,
+                                    halfH: halfH,
+                                    cropFracW: cropFracW,
+                                    cropFracH: cropFracH,
+                                    activeW: activeW,
+                                    activeH: activeH,
+                                  ),
                               ],
                             ),
                           ),
@@ -1174,7 +1275,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                             normY: normY,
                             style: _config.style,
                             speakerLocked: effective != null,
-                            faces: faces,
+                            faces: _showTapBoxesOnPreview ? faces : const [],
                           ),
                         ),
                       ],
@@ -1186,6 +1287,101 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           ),
       ],
     );
+  }
+
+  List<Widget> _buildCameraViewTapBoxes({
+    required List<ReframeFaceMarker> faces,
+    required double cx,
+    required double cy,
+    required double halfW,
+    required double halfH,
+    required double cropFracW,
+    required double cropFracH,
+    required double activeW,
+    required double activeH,
+  }) {
+    final track = _track;
+    if (track == null) return const [];
+    final widgets = <Widget>[];
+
+    for (final face in faces) {
+      final relX = (face.normX - (cx - halfW)) / cropFracW;
+      final relY = (face.normY - (cy - halfH)) / cropFracH;
+      if (relX < -0.25 || relX > 1.25 || relY < -0.25 || relY > 1.25) {
+        continue;
+      }
+
+      final boxW =
+          ((face.normW / cropFracW) * activeW * 1.25).clamp(48.0, activeW * 0.78);
+      final boxH =
+          ((face.normH / cropFracH) * activeH * 1.45).clamp(58.0, activeH * 0.70);
+      final left = (relX * activeW - boxW * 0.5).clamp(2.0, max(2.0, activeW - boxW - 2.0));
+      final top = (relY * activeH - boxH * 0.42).clamp(2.0, max(2.0, activeH - boxH - 2.0));
+
+      final Color borderColor;
+      final String statusBadge;
+      if (face.locked) {
+        borderColor = const Color(0xFFE040FB);
+        statusBadge = '🔒 مثبت';
+      } else if (face.isSpeaking) {
+        borderColor = const Color(0xFF00E676);
+        statusBadge = '🎤 يتحدث';
+      } else {
+        borderColor = const Color(0xFF00E5FF);
+        statusBadge = '👆 المس للتثبيت';
+      }
+
+      final shortName = face.label.split(' ').take(2).join(' ');
+
+      widgets.add(
+        Positioned(
+          left: left,
+          top: top,
+          width: boxW,
+          height: boxH,
+          child: IgnorePointer(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: borderColor.withValues(
+                    alpha: face.locked || face.isSpeaking ? 0.90 : 0.65,
+                  ),
+                  width: face.locked || face.isSpeaking ? 2.0 : 1.3,
+                ),
+              ),
+              alignment: Alignment.topCenter,
+              child: Transform.translate(
+                offset: const Offset(0, -1),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1.5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: borderColor.withValues(alpha: 0.85),
+                    borderRadius: const BorderRadius.vertical(
+                      bottom: Radius.circular(5),
+                    ),
+                  ),
+                  child: Text(
+                    '$shortName · $statusBadge',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 8.5,
+                      color: Colors.black,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
   }
 
   Widget _buildCameraStripMiniMap({
@@ -1202,7 +1398,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     final cx = normX.clamp(halfW, 1.0 - halfW);
 
     return SizedBox(
-      height: 42,
+      height: 44,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final stripW = constraints.maxWidth;
@@ -1242,25 +1438,42 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 children: [
                   for (final face in faces)
                     Positioned(
-                      left: (face.normX * stripW - 18).clamp(2.0, stripW - 40),
+                      left: (face.normX * stripW - 26).clamp(2.0, stripW - 58),
                       top: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: face.locked
-                              ? const Color(0xFFE040FB)
-                              : Colors.cyan.withValues(alpha: 0.80),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          face.label.split(' ').take(2).join(' '),
-                          style: const TextStyle(
-                            fontSize: 9,
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+                      child: GestureDetector(
+                        onTap: () {
+                          final track = _track;
+                          if (track == null) return;
+                          for (final p in track.speakers) {
+                            if (p.id == face.speakerId) {
+                              _toggleTapLockOnPerson(p);
+                              break;
+                            }
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: face.locked
+                                ? const Color(0xFFE040FB)
+                                : (face.isSpeaking
+                                    ? const Color(0xFF00E676)
+                                    : Colors.cyan.withValues(alpha: 0.80)),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            '${face.locked ? '🔒 ' : (face.isSpeaking ? '🎤 ' : '')}'
+                            '${face.label.split(' ').take(2).join(' ')}',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              color: face.isSpeaking && !face.locked
+                                  ? Colors.black
+                                  : Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
@@ -1270,20 +1483,23 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     top: 2,
                     width: winW,
                     height: stripH - 4,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE040FB).withValues(alpha: 0.22),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: const Color(0xFFE040FB),
-                          width: 2,
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color:
+                              const Color(0xFFE040FB).withValues(alpha: 0.20),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: const Color(0xFFE040FB),
+                            width: 2,
+                          ),
                         ),
-                      ),
-                      alignment: Alignment.center,
-                      child: const Icon(
-                        Icons.open_with,
-                        size: 14,
-                        color: Colors.white70,
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.open_with,
+                          size: 14,
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                   ),
@@ -1296,11 +1512,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// Card allowing the user to choose for the **Current Shot / Scene**:
-  /// 1) Follow the Active Speaker automatically (`الثبات على المتكلم تلقائياً`)
-  /// 2) Lock onto a Specific Person during this shot (`تثبيت على شخص معين في هذه اللقطة`)
-  /// 3) Lock the camera at a Static Position during this shot (`تثبيت موضع الكاميرا طوال اللقطة`)
-  /// Plus a button to split/create a custom shot at the playhead (`تقسيم اللقطة هنا`).
   Widget _buildShotLockCard() {
     final track = _track;
     if (track == null || _shots.isEmpty) return const SizedBox.shrink();
@@ -1359,7 +1570,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            // Shot navigation & custom split/merge row
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -1393,7 +1603,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             ),
             const SizedBox(height: 10),
             const Text(
-              'اختر لمن تثبت الكاميرا أثناء هذه اللقطة:',
+              'اختر لمن تثبت الكاميرا أثناء هذه اللقطة (أو المس الشخص مباشرة داخل الفيديو):',
               style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 6),
@@ -1404,7 +1614,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 ChoiceChip(
                   avatar: const Icon(Icons.record_voice_over, size: 16),
                   label: const Text(
-                    'المتكلم تلقائياً',
+                    'المتكلم تلقائياً (صوت + شفاه)',
                     style: TextStyle(fontSize: 12),
                   ),
                   selected: effectiveMode == ShotLockMode.autoSpeaker,
@@ -1414,7 +1624,8 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                   ChoiceChip(
                     avatar: const Icon(Icons.person_pin_circle, size: 16),
                     label: Text(
-                      'تثبيت: ${profile.label}',
+                      'تثبيت: ${profile.label}'
+                      '${profile.boundVoiceClusterId != null ? ' 🔊' : ''}',
                       style: const TextStyle(fontSize: 12),
                     ),
                     selected: effectiveMode == ShotLockMode.specificPerson &&
@@ -1437,7 +1648,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'نصيحة: يمكنك تقسيم اللقطة عند أي ثانية بـ "✂️ تقسيم لقطة هنا" ثم اختيار الشخص أو الضغط على وجهه مباشرة لتثبيت الكاميرا عليه في هذه اللقطة فقط.',
+              '💡 ميزة Tap-to-Track: المس أي شخص مباشرة على شاشة الفيديو لقفل الكاميرا عليه في هذه اللقطة، والمسه مرة أخرى للعودة للتتبع التلقائي.',
               style: TextStyle(fontSize: 10.5, color: AppColors.textTertiary),
             ),
           ],
@@ -1446,7 +1657,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// Interactive Keyframe Timeline & Smooth Camera Control Panel.
   Widget _buildKeyframeEditor() {
     final keyframes = _workingKeyframes;
     final currentIdx = _nearestKfIndex(_positionSeconds);
@@ -1501,7 +1711,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
               ],
             ),
             const SizedBox(height: 6),
-            // Smooth Horizontal Camera Panning Slider
             Row(
               children: [
                 const Icon(Icons.swap_horiz, size: 16, color: Color(0xFFE040FB)),
@@ -1533,7 +1742,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 ),
               ],
             ),
-            // Magnetic keyframe timeline
             _buildMagneticTimeline(
               keyframes: keyframes,
               duration: duration,
@@ -1744,19 +1952,20 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
 
   Widget _buildTrackSummary() {
     final track = _track!;
+    final voiceBoundCount =
+        track.speakers.where((s) => s.boundVoiceClusterId != null).length;
     return Card(
       color: AppColors.surfaceLight,
       child: ListTile(
         dense: true,
-        leading: const Icon(Icons.face, color: Color(0xFFE040FB)),
+        leading: const Icon(Icons.record_voice_over, color: Color(0xFFE040FB)),
         title: Text(
-          'Speaker locked · ${track.facesDetectedCount} faces · '
+          '3-Layer AI · ${track.speakers.length} people ($voiceBoundCount voice-locked) · '
           '${_workingKeyframes.length} keyframes · ${_shots.length} shots',
-          style: const TextStyle(fontSize: 13),
+          style: const TextStyle(fontSize: 12.5),
         ),
         subtitle: Text(
-          'avg x=${track.avgNormX.toStringAsFixed(2)} '
-          'y=${track.avgNormY.toStringAsFixed(2)}',
+          '${track.facesDetectedCount} face detections · Tap any person on video to lock/unlock',
           style: const TextStyle(fontSize: 11),
         ),
       ),
@@ -1773,7 +1982,8 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final preset in AspectRatioPreset.values)              ChoiceChip(
+            for (final preset in AspectRatioPreset.values)
+              ChoiceChip(
                 avatar: Icon(preset.icon, size: 18),
                 label: Text(preset.shortLabel),
                 selected: _config.preset == preset,
@@ -1951,7 +2161,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// Global default speaker selector across the entire video.
   Widget _buildSpeakerSelector() {
     final track = _track;
     if (track == null || track.speakers.isEmpty) return const SizedBox.shrink();
@@ -1994,7 +2203,10 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                       ? Theme.of(context).colorScheme.primary
                       : null,
                 ),
-                label: Text(profile.label),
+                label: Text(
+                  '${profile.label}'
+                  '${profile.boundVoiceClusterId != null ? ' 🔊' : ''}',
+                ),
                 selected: selectedId == profile.id,
                 onSelected: (_) => _selectSpeaker(profile.id),
               ),
@@ -2003,7 +2215,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         const SizedBox(height: 4),
         Text(
           selectedLabel == null
-              ? 'الوضع العام: الكاميرا تتبع الشخص المتكلم تلقائياً وتتحرك معه بسلاسة.'
+              ? 'الوضع العام: الكاميرا تتبع الشخص المتكلم تلقائياً (بصمة الصوت + حركة الشفاه الداخلية + الجسد العلوي).'
               : 'الوضع العام: الكاميرا مثبتة على $selectedLabel طوال الفيديو.',
           style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
         ),
@@ -2012,18 +2224,27 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 }
 
-/// One detected face at the current preview instant.
 class ReframeFaceMarker {
+  final int speakerId;
   final double normX;
   final double normY;
+  final double normW;
+  final double normH;
   final String label;
   final bool locked;
+  final bool isSpeaking;
+  final bool hasVoiceFingerprint;
 
   const ReframeFaceMarker({
+    this.speakerId = 0,
     required this.normX,
     required this.normY,
+    this.normW = 0.14,
+    this.normH = 0.22,
     required this.label,
     this.locked = false,
+    this.isSpeaking = false,
+    this.hasVoiceFingerprint = false,
   });
 }
 
@@ -2177,31 +2398,54 @@ class ReframeOverlayPainter extends CustomPainter {
 
     for (final face in faces) {
       final center = Offset(face.normX * size.width, face.normY * size.height);
-      final color = face.locked
-          ? const Color(0xFFE040FB)
-          : const Color(0xFF00E5FF);
-      canvas.drawCircle(
-        center,
-        15,
-        Paint()..color = color.withValues(alpha: face.locked ? 0.35 : 0.18),
+      final boxW = (face.normW * size.width * 1.25).clamp(38.0, size.width * 0.45);
+      final boxH = (face.normH * size.height * 1.55).clamp(48.0, size.height * 0.65);
+      final personRect = Rect.fromLTWH(
+        (center.dx - boxW * 0.5).clamp(2.0, size.width - boxW - 2.0),
+        (center.dy - boxH * 0.38).clamp(2.0, size.height - boxH - 2.0),
+        boxW,
+        boxH,
       );
-      canvas.drawCircle(
-        center,
-        15,
+
+      final Color color;
+      final String statusText;
+      if (face.locked) {
+        color = const Color(0xFFE040FB);
+        statusText = '🔒 مثبت';
+      } else if (face.isSpeaking) {
+        color = const Color(0xFF00E676);
+        statusText = '🎤 يتحدث';
+      } else {
+        color = const Color(0xFF00E5FF);
+        statusText = '👆 المس للتثبيت';
+      }
+
+      final rrect = RRect.fromRectAndRadius(personRect, const Radius.circular(8));
+      canvas.drawRRect(
+        rrect,
+        Paint()..color = color.withValues(alpha: face.locked || face.isSpeaking ? 0.16 : 0.08),
+      );
+      canvas.drawRRect(
+        rrect,
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
-          ..strokeWidth = face.locked ? 3 : 1.6,
+          ..strokeWidth = face.locked || face.isSpeaking ? 2.4 : 1.5,
       );
+
+      final shortLabel = face.label.split(' ').take(2).join(' ');
       final label = TextPainter(
         text: TextSpan(
-          text: face.label.split(' ').take(2).join(' '),
+          text: ' $shortLabel · $statusText ',
           style: TextStyle(
-            color: Colors.white,
+            color: face.isSpeaking && !face.locked ? Colors.black : Colors.white,
             fontSize: 10,
-            fontWeight: FontWeight.w600,
-            backgroundColor:
-                face.locked ? const Color(0xCC9C27B0) : const Color(0xAA006064),
+            fontWeight: FontWeight.w700,
+            backgroundColor: face.locked
+                ? const Color(0xDD9C27B0)
+                : (face.isSpeaking
+                    ? const Color(0xDD00E676)
+                    : const Color(0xCC006064)),
           ),
         ),
         textDirection: TextDirection.ltr,
@@ -2209,8 +2453,8 @@ class ReframeOverlayPainter extends CustomPainter {
       label.paint(
         canvas,
         Offset(
-          (center.dx - label.width / 2).clamp(0.0, size.width - label.width),
-          (center.dy + 18).clamp(0.0, size.height - label.height),
+          personRect.left.clamp(0.0, size.width - label.width),
+          max(0.0, personRect.top - label.height - 2),
         ),
       );
     }
@@ -2234,10 +2478,10 @@ class ReframeOverlayPainter extends CustomPainter {
     if (speakerLocked && faceTracking) {
       final badge = TextPainter(
         text: const TextSpan(
-          text: 'Speaker Locked',
+          text: ' 3-Layer AI Speaker Lock ',
           style: TextStyle(
             color: Colors.white,
-            fontSize: 11,
+            fontSize: 10.5,
             fontWeight: FontWeight.w600,
             backgroundColor: Color(0xAA9C27B0),
           ),
