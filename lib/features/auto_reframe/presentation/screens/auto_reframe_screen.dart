@@ -1311,12 +1311,18 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         continue;
       }
 
-      final boxW =
-          ((face.normW / cropFracW) * activeW * 1.25).clamp(48.0, activeW * 0.78);
-      final boxH =
-          ((face.normH / cropFracH) * activeH * 1.45).clamp(58.0, activeH * 0.70);
-      final left = (relX * activeW - boxW * 0.5).clamp(2.0, max(2.0, activeW - boxW - 2.0));
-      final top = (relY * activeH - boxH * 0.42).clamp(2.0, max(2.0, activeH - boxH - 2.0));
+      final double boxW = ((face.normW / cropFracW) * activeW * 1.25)
+          .clamp(48.0, activeW * 0.78)
+          .toDouble();
+      final double boxH = ((face.normH / cropFracH) * activeH * 1.45)
+          .clamp(58.0, activeH * 0.70)
+          .toDouble();
+      final double maxLeft = max<double>(2.0, activeW - boxW - 2.0);
+      final double maxTop = max<double>(2.0, activeH - boxH - 2.0);
+      final double left =
+          (relX * activeW - boxW * 0.5).clamp(2.0, maxLeft).toDouble();
+      final double top =
+          (relY * activeH - boxH * 0.42).clamp(2.0, maxTop).toDouble();
 
       final Color borderColor;
       final String statusBadge;

@@ -772,9 +772,9 @@ class FaceDetectionService {
         highBands[f] = highE / totE;
       }
 
-      final dsLen = min(900, len ~/ 2);
+      final dsLen = min<int>(900, len ~/ 2);
       if (dsLen >= 160) {
-        final offset = start + max(0, (len - dsLen * 2) ~/ 2);
+        final int offset = start + max<int>(0, (len - dsLen * 2) ~/ 2);
         var mean = 0.0;
         for (var k = 0; k < dsLen; k++) {
           mean += samples[offset + k * 2];
