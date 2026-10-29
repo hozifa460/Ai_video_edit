@@ -14,8 +14,8 @@ import '../../../../core/utils/logger.dart';
 import '../../data/services/ffmpeg_auto_reframe_service.dart';
 import '../../domain/entities/reframe_config.dart';
 
-/// Standalone Auto Reframe studio: real ML Kit speaker tracking, a live crop
-/// overlay, and an FFmpeg render for any target aspect ratio.
+/// Standalone Auto Reframe studio: real ML Kit speaker tracking, per-shot
+/// speaker/target locking, smooth virtual camera keyframes, and FFmpeg render.
 class AutoReframeScreen extends StatefulWidget {
   final String videoPath;
 
@@ -47,11 +47,7 @@ class AutoReframeScreen extends StatefulWidget {
     );
   }
 
-  /// Pure drag-step math (unit-tested): `onPanUpdate` delivers PER-FRAME
-  /// incremental pixel deltas, so each step must be applied to the CURRENT
-  /// drag position (the caller advances the origin with the returned,
-  /// clamped center). Applying deltas to the fixed `onPanStart` origin would
-  /// move the box by only one frame's delta (~2px) for the whole gesture.
+  /// Pure drag-step math (unit-tested).
   static (double, double) dragStepCenter({
     required (double, double) origin,
     required double deltaXPx,
@@ -83,28 +79,24 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   String? _error;
 
   FaceTrackResult? _track;
-
-  /// The trajectory actually rendered/previewed: auto active-speaker path, or
-  /// the locked person's path when `selectedSpeakerId` is set. Recomputed only
-  /// when the analysis, motion preset or speaker selection changes.
   FaceTrackResult? _effectiveTrack;
+
+  /// Shots / scenes in chronological order (from AI scene detection + any
+  /// custom user splits).
+  List<SceneShot> _shots = const [];
+
+  /// Per-shot user tracking overrides (`shot.id -> ShotTrackingOverride`).
+  final Map<int, ShotTrackingOverride> _shotOverrides =
+      <int, ShotTrackingOverride>{};
 
   /// AI-generated keyframes (normalized for editing) — the "Reset AI" base.
   List<FaceTrackPoint> _aiKeyframes = const [];
 
-  /// User-editable keyframe list driving preview + render. Re-initialized
-  /// whenever [_recomputeEffectiveTrack] runs.
+  /// User-editable keyframe list driving preview + render.
   List<FaceTrackPoint> _workingKeyframes = const [];
 
-  /// Pixel radius within which the magnetic timeline snaps the playhead to
-  /// a keyframe marker (CapCut-style magnetic scrubbing).
   static const double magneticSnapPx = 12.0;
-
-  /// Last keyframe the magnetic timeline snapped to during the current
-  /// gesture (haptic feedback fires once per newly-snapped keyframe).
   double? _lastSnappedKfSec;
-
-  /// Crop-box drag origin (normalized), kept across a pan gesture.
   (double, double)? _dragOrigin;
 
   /// When true, the preview renders the live cropped 9:16 virtual camera
@@ -174,8 +166,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     await _analyzeFaces();
   }
 
-  /// FFprobe first, player duration as fallback (Release builds can lose the
-  /// FFprobe JNI bridge, which must never block the feature).
   Future<void> _probeDuration() async {
     try {
       final session = await FFprobeKit.getMediaInformation(widget.videoPath);
@@ -198,6 +188,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       _analysisProgress = 0;
       _analysisStatus = 'Preparing face analysis...';
     });
+
     final result = await FaceDetectionService.analyzeVideoFaceTrack(
       widget.videoPath,
       durationSec: _durationSeconds > 0 ? _durationSeconds : null,
@@ -211,21 +202,35 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         });
       },
     );
+
     if (!mounted) return;
     setState(() {
       _track = result;
       _analyzing = false;
+      _shotOverrides.clear();
       if (result == null) {
         _analysisStatus = 'No face found — center crop will be used';
+        _shots = _durationSeconds > 0
+            ? [SceneShot(id: 0, startSec: 0, endSec: _durationSeconds)]
+            : const [];
+      } else {
+        _shots = result.shots.isNotEmpty
+            ? List<SceneShot>.of(result.shots)
+            : [
+                SceneShot(
+                  id: 0,
+                  startSec: 0,
+                  endSec: max(_durationSeconds, result.rawPoints.isNotEmpty ? result.rawPoints.last.timeSec : 1.0),
+                ),
+              ];
       }
       _recomputeEffectiveTrack();
     });
   }
 
-  /// Resolves the path used by preview + render: the auto active-speaker
-  /// trajectory, or the locked person's own trajectory when a speaker chip is
-  /// selected (`selectedSpeakerId != null`), then (re)initializes the manual
-  /// keyframe editor from those keyframes.
+  /// Resolves the camera trajectory from the global speaker lock AND any
+  /// per-shot overrides (`_shotOverrides`), then initializes the smooth
+  /// keyframe editor.
   void _recomputeEffectiveTrack() {
     final track = _track;
     if (track == null) {
@@ -234,37 +239,56 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       _workingKeyframes = const [];
       return;
     }
-    final id = _config.selectedSpeakerId;
-    FaceTrackResult resolved = track;
-    if (id != null) {
+
+    final globalSpeakerId = _config.selectedSpeakerId;
+    List<FaceTrackPoint> computedKeyframes;
+
+    if (_shots.isNotEmpty &&
+        (_shotOverrides.isNotEmpty || globalSpeakerId != null)) {
+      computedKeyframes = FaceDetectionService.buildKeyframesWithShotOverrides(
+        track: track,
+        shots: _shots,
+        shotOverrides: _shotOverrides,
+        globalSpeakerId: globalSpeakerId,
+        deadZone: _config.motion.deadZone,
+        smoothness: _config.motion.smoothness,
+      );
+    } else if (globalSpeakerId != null) {
       DetectedSpeakerProfile? profile;
       for (final candidate in track.speakers) {
-        if (candidate.id == id) {
+        if (candidate.id == globalSpeakerId) {
           profile = candidate;
           break;
         }
       }
-      if (profile != null) {
-        resolved = FaceTrackResult(
-          rawPoints: profile.rawPoints,
-          keyframes: FaceDetectionService.buildKeyframes(
-            profile.rawPoints,
-            deadZone: _config.motion.deadZone,
-            smoothness: _config.motion.smoothness,
-          ),
-          avgNormX: profile.avgNormX,
-          avgNormY: profile.avgNormY,
-          facesDetectedCount: track.facesDetectedCount,
-          speakers: track.speakers,
-          sourceWidth: track.sourceWidth,
-          sourceHeight: track.sourceHeight,
-        );
-      }
+      computedKeyframes = profile != null
+          ? FaceDetectionService.buildKeyframes(
+              profile.rawPoints,
+              deadZone: _config.motion.deadZone,
+              smoothness: _config.motion.smoothness,
+            )
+          : track.keyframes;
+    } else {
+      computedKeyframes = FaceDetectionService.buildKeyframes(
+        track.rawPoints,
+        deadZone: _config.motion.deadZone,
+        smoothness: _config.motion.smoothness,
+      );
     }
-    _effectiveTrack = resolved;
 
-    // Clean, editable keyframes: fold synthetic 1ms helpers into single
-    // cut keyframes and flag every >= 0.10 jump as an instant cut.
+    final resolved = FaceTrackResult(
+      rawPoints: track.rawPoints,
+      keyframes: computedKeyframes,
+      avgNormX: track.avgNormX,
+      avgNormY: track.avgNormY,
+      facesDetectedCount: track.facesDetectedCount,
+      speakers: track.speakers,
+      shots: _shots,
+      sourceWidth: track.sourceWidth,
+      sourceHeight: track.sourceHeight,
+    );
+
+    _effectiveTrack = resolved;
     _aiKeyframes = FaceDetectionService.normalizeKeyframesForEditing(
       resolved.keyframes,
     );
@@ -272,10 +296,159 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Per-Shot / Scene Lock Controls ("الثبات على المتكلم أو شخص معين أثناء لقطة معينة")
+  // ---------------------------------------------------------------------------
+
+  int _currentShotIndexAt(double timeSec) {
+    if (_shots.isEmpty) return -1;
+    for (var i = 0; i < _shots.length; i++) {
+      if (_shots[i].contains(timeSec)) return i;
+    }
+    if (timeSec <= _shots.first.startSec) return 0;
+    return _shots.length - 1;
+  }
+
+  SceneShot? _currentShotAt(double timeSec) {
+    final idx = _currentShotIndexAt(timeSec);
+    return idx >= 0 && idx < _shots.length ? _shots[idx] : null;
+  }
+
+  /// Splits the active shot at the current playhead timestamp so the user can
+  /// isolate any custom segment `[t1 .. t2]` and lock it onto a specific
+  /// speaker or static camera position.
+  void _splitShotAtPlayhead() {
+    if (_shots.isEmpty) {
+      if (_durationSeconds <= 0.6) return;
+      setState(() {
+        _shots = [
+          SceneShot(id: 0, startSec: 0, endSec: _durationSeconds),
+        ];
+      });
+    }
+    final t = _positionSeconds;
+    final idx = _currentShotIndexAt(t);
+    if (idx < 0) return;
+    final shot = _shots[idx];
+    if (t - shot.startSec < 0.30 || shot.endSec - t < 0.30) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'حرك المؤشر داخل اللقطة (بفارق 0.3 ثانية على الأقل عن البداية/النهاية) لتقسيمها',
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final maxId = _shots.fold<int>(0, (m, s) => max(m, s.id));
+    final firstHalf = SceneShot(
+      id: shot.id,
+      startSec: shot.startSec,
+      endSec: t,
+    );
+    final secondHalf = SceneShot(
+      id: maxId + 1,
+      startSec: t,
+      endSec: shot.endSec,
+    );
+
+    setState(() {
+      final updated = List<SceneShot>.of(_shots);
+      updated[idx] = firstHalf;
+      updated.insert(idx + 1, secondHalf);
+      if (_shotOverrides.containsKey(shot.id)) {
+        _shotOverrides[secondHalf.id] = _shotOverrides[shot.id]!;
+      }
+      _shots = updated;
+      _recomputeEffectiveTrack();
+    });
+    HapticFeedback.mediumImpact();
+  }
+
+  /// Merges the current shot with the preceding shot (or next shot if at #0).
+  void _mergeCurrentShot() {
+    if (_shots.length <= 1) return;
+    final idx = _currentShotIndexAt(_positionSeconds);
+    if (idx < 0) return;
+    setState(() {
+      final updated = List<SceneShot>.of(_shots);
+      if (idx > 0) {
+        final prev = updated[idx - 1];
+        final curr = updated[idx];
+        updated[idx - 1] = prev.copyWith(endSec: curr.endSec);
+        _shotOverrides.remove(curr.id);
+        updated.removeAt(idx);
+      } else {
+        final curr = updated[0];
+        final next = updated[1];
+        updated[0] = curr.copyWith(endSec: next.endSec);
+        _shotOverrides.remove(next.id);
+        updated.removeAt(1);
+      }
+      _shots = updated;
+      _recomputeEffectiveTrack();
+    });
+  }
+
+  void _jumpShot(int direction) {
+    if (_shots.isEmpty) return;
+    final idx = _currentShotIndexAt(_positionSeconds);
+    if (idx < 0) return;
+    if (direction < 0) {
+      final current = _shots[idx];
+      if (_positionSeconds - current.startSec > 0.4) {
+        _seekToTime(current.startSec + 0.02);
+      } else if (idx > 0) {
+        _seekToTime(_shots[idx - 1].startSec + 0.02);
+      } else {
+        _seekToTime(0);
+      }
+    } else {
+      if (idx + 1 < _shots.length) {
+        _seekToTime(_shots[idx + 1].startSec + 0.02);
+      }
+    }
+  }
+
+  void _setShotModeAutoSpeaker(SceneShot shot) {
+    setState(() {
+      _shotOverrides[shot.id] = const ShotTrackingOverride(
+        mode: ShotLockMode.autoSpeaker,
+      );
+      _recomputeEffectiveTrack();
+    });
+  }
+
+  void _setShotModePerson(SceneShot shot, int speakerId) {
+    setState(() {
+      _shotOverrides[shot.id] = ShotTrackingOverride(
+        mode: ShotLockMode.specificPerson,
+        speakerId: speakerId,
+      );
+      _recomputeEffectiveTrack();
+    });
+  }
+
+  void _setShotModeStaticPosition(
+    SceneShot shot,
+    double normX,
+    double normY,
+  ) {
+    setState(() {
+      _shotOverrides[shot.id] = ShotTrackingOverride(
+        mode: ShotLockMode.staticPosition,
+        staticNormX: normX,
+        staticNormY: normY,
+      );
+      _recomputeEffectiveTrack();
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Manual keyframe editor
   // ---------------------------------------------------------------------------
 
-  /// Working-keyframe position at [timeSec], honoring `isCut` holds/snaps.
   (double, double) _currentSampledPosition(double timeSec) {
     final keyframes = _workingKeyframes;
     if (keyframes.isEmpty) {
@@ -284,7 +457,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return FaceTrackResult.sampleKeyframes(keyframes, timeSec);
   }
 
-  /// Index of the keyframe nearest to [timeSec] (`-1` when there is none).
   int _nearestKfIndex(double timeSec) {
     final keyframes = _workingKeyframes;
     if (keyframes.isEmpty) return -1;
@@ -301,9 +473,16 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 
   /// Insert-or-update a manual camera keyframe at [timeSec].
-  /// Manual edits default to smooth camera motion (`isCut: false`) and prune
-  /// nearby conflicting AI points so the viewport moves like a real camera.
+  /// Manual edits ALWAYS default to smooth camera motion (`isCut: false`).
   void _upsertManualKeyframeAt(double timeSec, double normX, double normY) {
+    final currentShot = _currentShotAt(timeSec);
+    final currentOverride =
+        currentShot != null ? _shotOverrides[currentShot.id] : null;
+    if (currentShot != null &&
+        currentOverride?.mode == ShotLockMode.staticPosition) {
+      _setShotModeStaticPosition(currentShot, normX, normY);
+      return;
+    }
     setState(() {
       _workingKeyframes = FaceDetectionService.upsertManualKeyframe(
         _workingKeyframes,
@@ -324,7 +503,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     setState(() {});
   }
 
-  /// Index of a keyframe the playhead currently sits on (±0.25s), or -1.
   int _keyframeAtPlayheadIndex() {
     final keyframes = _workingKeyframes;
     if (keyframes.isEmpty) return -1;
@@ -340,8 +518,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return best;
   }
 
-  /// The single smart `◆+ Add KF` / `◆- Delete KF` button: drops a keyframe
-  /// at the playhead, or removes the one the playhead sits on.
   void _smartKeyframeToggle() {
     final index = _keyframeAtPlayheadIndex();
     if (index >= 0) {
@@ -361,44 +537,40 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  /// `Center ⌖`: parks the current keyframe at the frame center (0.5, 0.45).
   void _centerCurrentKeyframe() {
     final onIdx = _keyframeAtPlayheadIndex();
-    final index =
-        onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
+    final index = onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
     if (index < 0) return;
     setState(() {
       final updated = List<FaceTrackPoint>.of(_workingKeyframes);
       updated[index] = updated[index].copyWith(
         normX: 0.5,
         normY: 0.45,
+        isCut: false,
         isManual: true,
       );
       _workingKeyframes = updated;
     });
   }
 
-  /// `Clear All 🗑️`: drops every AI keyframe and leaves one centered keyframe
-  /// at 0:00 so the whole video can be keyframed manually from scratch.
   void _clearAllKeyframes() {
     setState(() {
+      _shotOverrides.clear();
       _workingKeyframes = [
         const FaceTrackPoint(
           timeSec: 0,
           normX: 0.5,
           normY: 0.45,
+          isCut: false,
           isManual: true,
         ),
       ];
     });
   }
 
-  /// Toggles the transition of the current keyframe. Marked `isManual` so the
-  /// automatic cut heuristics never override the user's choice.
   void _toggleCutForCurrentKeyframe() {
     final onIdx = _keyframeAtPlayheadIndex();
-    final index =
-        onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
+    final index = onIdx >= 0 ? onIdx : _nearestKfIndex(_positionSeconds);
     if (index < 0) return;
     setState(() {
       final updated = List<FaceTrackPoint>.of(_workingKeyframes);
@@ -409,10 +581,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 
   void _resetKeyframes() {
-    setState(() => _workingKeyframes = List<FaceTrackPoint>.of(_aiKeyframes));
+    setState(() {
+      _shotOverrides.clear();
+      _recomputeEffectiveTrack();
+    });
   }
 
-  /// -1 = previous keyframe before the playhead, +1 = next one after it.
   void _jumpKeyframe(int direction) {
     final position = _positionSeconds;
     double? target;
@@ -431,7 +605,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     if (target != null) _seekToTime(target);
   }
 
-  /// Output crop aspect after `frameFill` (mirrors the FFmpeg inner box).
   double _effectiveCropAspect() {
     final (outW, outH) = _config.outputSize;
     final box = FfmpegAutoReframeService.innerBoxForFill(
@@ -442,7 +615,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return box.boxW / box.boxH;
   }
 
-  /// Keeps the crop window fully inside the source frame while dragging.
   (double, double) _clampCropCenter(
     double normX,
     double normY,
@@ -480,9 +652,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       previewW,
       previewH,
     );
-    // Advance the origin with the CLAMPED result so the next frame's delta
-    // accumulates from where the box actually is — without this, dragging
-    // only nudges the box by one frame's delta.
     _dragOrigin = (clampedX, clampedY);
     _upsertManualKeyframeAt(_positionSeconds, clampedX, clampedY);
   }
@@ -496,24 +665,19 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     });
   }
 
-  /// Radius (normalized) under which a tap on the preview selects the
-  /// nearest detected person instead of moving the crop box.
   static const double tapLockDistance = 0.12;
 
-  /// Tap-to-lock: selects the detected person whose marker is within
-  /// [tapLockDistance] of the tap. Returns false when no marker is that
-  /// close (the caller then moves the crop box to the tapped spot).
+  /// Tapping a person on the preview locks the **current shot** onto that
+  /// person (or globally if no shots exist).
   bool _selectSpeakerNearTap(double normX, double normY) {
     final track = _track;
     if (track == null || track.speakers.isEmpty) return false;
-
     DetectedSpeakerProfile? nearest;
     var bestDistance = double.infinity;
     for (final profile in track.speakers) {
       final (px, py) = _positionAt(profile.rawPoints, _positionSeconds);
       final dx = px - normX;
       final dy = py - normY;
-      // Squared distance vs squared radius (no sqrt needed).
       final distance = dx * dx + dy * dy;
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -524,11 +688,23 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         bestDistance >= tapLockDistance * tapLockDistance) {
       return false;
     }
-    _selectSpeaker(nearest.id);
+    final currentShot = _currentShotAt(_positionSeconds);
+    if (currentShot != null) {
+      _setShotModePerson(currentShot, nearest.id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'تم تثبيت اللقطة الحالية على ${nearest.label}',
+          ),
+          duration: const Duration(milliseconds: 1400),
+        ),
+      );
+    } else {
+      _selectSpeaker(nearest.id);
+    }
     return true;
   }
 
-  /// Position of a trajectory at one instant (nearest sampled point).
   static (double, double) _positionAt(
     List<FaceTrackPoint> points,
     double timeSec,
@@ -546,25 +722,27 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return (best.normX, best.normY);
   }
 
-  /// One marker per detected person at [timeSec]; the explicitly selected one
-  /// is flagged so the painter can highlight it.
   List<ReframeFaceMarker> _faceMarkersAt(double timeSec) {
     final track = _track;
     if (track == null || track.speakers.isEmpty) return const [];
-    final selectedId = _config.selectedSpeakerId;
+    final currentShot = _currentShotAt(timeSec);
+    final shotOverride =
+        currentShot != null ? _shotOverrides[currentShot.id] : null;
+    final lockedSpeakerId =
+        shotOverride?.mode == ShotLockMode.specificPerson
+            ? shotOverride?.speakerId
+            : _config.selectedSpeakerId;
     return [
       for (final profile in track.speakers)
         ReframeFaceMarker(
           normX: _positionAt(profile.rawPoints, timeSec).$1,
           normY: _positionAt(profile.rawPoints, timeSec).$2,
           label: profile.label,
-          locked: profile.id == selectedId,
+          locked: profile.id == lockedSpeakerId,
         ),
     ];
   }
 
-  /// Re-smooths the already measured trajectory. No FFmpeg, no ML Kit: the
-  /// motion preset is a pure post-processing choice.
   void _applyMotionPreset(CameraMotionPreset preset) {
     setState(() {
       _config = _config.copyWith(motion: preset);
@@ -581,6 +759,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           avgNormY: track.avgNormY,
           facesDetectedCount: track.facesDetectedCount,
           speakers: track.speakers,
+          shots: _shots,
           sourceWidth: track.sourceWidth,
           sourceHeight: track.sourceHeight,
         );
@@ -599,6 +778,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     if (width == null || height == null || width <= 0 || height <= 0) return;
     setState(
       () => _config = _config.copyWith(
+        preset: AspectRatioPreset.custom,
         customWidthRatio: width,
         customHeightRatio: height,
       ),
@@ -607,57 +787,48 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
 
   Future<void> _render() async {
     if (_rendering) return;
+    _controller?.pause();
+    setState(() {
+      _rendering = true;
+      _error = null;
+    });
+
     final tempDir = await getTemporaryDirectory();
     final outputPath =
         '${tempDir.path}/reframe_${DateTime.now().millisecondsSinceEpoch}.mp4';
 
     final progress = ValueNotifier<double>(0);
-    final status = ValueNotifier<String>('Starting render...');
-    if (!mounted) {
-      progress.dispose();
-      status.dispose();
-      return;
-    }
-    setState(() => _rendering = true);
+    final status = ValueNotifier<String>('Starting FFmpeg...');
     var dialogOpen = true;
-
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => PopScope(
         canPop: false,
         child: AlertDialog(
+          backgroundColor: AppColors.surface,
           title: const Text('Rendering Auto Reframe'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ValueListenableBuilder<double>(
-                valueListenable: progress,
-                builder: (_, value, _) => LinearProgressIndicator(value: value),
-              ),
-              const SizedBox(height: 12),
-              ValueListenableBuilder<double>(
-                valueListenable: progress,
-                builder: (_, value, _) =>
-                    Text('${(value * 100).toStringAsFixed(0)}%'),
-              ),
-              const SizedBox(height: 8),
-              ValueListenableBuilder<String>(
-                valueListenable: status,
-                builder: (_, value, _) => Text(
-                  value,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12),
+          content: ValueListenableBuilder<double>(
+            valueListenable: progress,
+            builder: (_, value, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: value > 0 ? value : null),
+                const SizedBox(height: 12),
+                ValueListenableBuilder<String>(
+                  valueListenable: status,
+                  builder: (_, text, _) => Text(
+                    '${(value * 100).toStringAsFixed(0)}% · $text',
+                    style: const TextStyle(fontSize: 13),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
 
-    // Working keyframes are the source of truth after manual edits; expand
-    // effective cuts into 1ms steps (idempotent) so FFmpeg snaps exactly.
     final base = _effectiveTrack;
     final working = _workingKeyframes;
     final renderTrack = working.isEmpty
@@ -671,6 +842,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             avgNormY: base?.avgNormY ?? 0.42,
             facesDetectedCount: base?.facesDetectedCount ?? 0,
             speakers: base?.speakers ?? const [],
+            shots: _shots,
             sourceWidth: base?.sourceWidth ?? 0,
             sourceHeight: base?.sourceHeight ?? 0,
           );
@@ -746,8 +918,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           children: [
             _buildPreview(),
             const SizedBox(height: 12),
-            _buildKeyframeEditor(),
             if (_analyzing) _buildAnalysisBanner(),
+            if (!_analyzing && _track != null) ...[
+              _buildShotLockCard(),
+              const SizedBox(height: 12),
+            ],
+            _buildKeyframeEditor(),
             if (_track != null) _buildTrackSummary(),
             if (_track != null && _track!.speakers.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -818,7 +994,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Mode switch bar: Virtual Camera View (9:16) vs Full Source Frame (16:9)
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -860,7 +1035,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         const SizedBox(height: 8),
         if (_cameraViewMode &&
             _config.style != AutoReframeStyle.blurBackgroundFrame) ...[
-          // Live cropped Virtual Camera Viewport (pans like a real camera)
           Container(
             height: 300,
             decoration: BoxDecoration(
@@ -907,10 +1081,11 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     return GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onPanStart: (_) => _onCropPanStart(),
-                      // Dragging on the camera viewport pans the camera smoothly
+                      // Dragging on the 9:16 camera viewport pans the camera
+                      // in natural direction (drag left/right to aim camera).
                       onPanUpdate: (details) => _onCropPanUpdate(
-                        details.delta.dx,
-                        details.delta.dy,
+                        -details.delta.dx,
+                        -details.delta.dy,
                         fullVideoW,
                         fullVideoH,
                       ),
@@ -944,8 +1119,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          // 16:9 Camera Position Strip (Mini-Map): shows where the camera is
-          // aiming across the full horizontal scene and lets the user drag/tap
           _buildCameraStripMiniMap(
             srcAspect: srcAspect,
             effectiveAspect: effectiveAspect,
@@ -1015,8 +1188,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// Interactive horizontal camera strip below the 9:16 Camera View: shows all
-  /// detected speakers and the active camera window across the 16:9 scene.
   Widget _buildCameraStripMiniMap({
     required double srcAspect,
     required double effectiveAspect,
@@ -1031,7 +1202,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     final cx = normX.clamp(halfW, 1.0 - halfW);
 
     return SizedBox(
-      height: 40,
+      height: 42,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final stripW = constraints.maxWidth;
@@ -1071,17 +1242,17 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 children: [
                   for (final face in faces)
                     Positioned(
-                      left: (face.normX * stripW - 14).clamp(2.0, stripW - 30),
+                      left: (face.normX * stripW - 18).clamp(2.0, stripW - 40),
                       top: 8,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
+                          horizontal: 6,
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
                           color: face.locked
                               ? const Color(0xFFE040FB)
-                              : Colors.cyan.withValues(alpha: 0.75),
+                              : Colors.cyan.withValues(alpha: 0.80),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
@@ -1110,9 +1281,9 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                       ),
                       alignment: Alignment.center,
                       child: const Icon(
-                        Icons.videocam,
+                        Icons.open_with,
                         size: 14,
-                        color: Colors.white,
+                        color: Colors.white70,
                       ),
                     ),
                   ),
@@ -1125,135 +1296,279 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Interactive keyframe editor
-  // ---------------------------------------------------------------------------
+  /// Card allowing the user to choose for the **Current Shot / Scene**:
+  /// 1) Follow the Active Speaker automatically (`الثبات على المتكلم تلقائياً`)
+  /// 2) Lock onto a Specific Person during this shot (`تثبيت على شخص معين في هذه اللقطة`)
+  /// 3) Lock the camera at a Static Position during this shot (`تثبيت موضع الكاميرا طوال اللقطة`)
+  /// Plus a button to split/create a custom shot at the playhead (`تقسيم اللقطة هنا`).
+  Widget _buildShotLockCard() {
+    final track = _track;
+    if (track == null || _shots.isEmpty) return const SizedBox.shrink();
 
-  Widget _buildKeyframeEditor() {
-    final keyframes = _workingKeyframes;
-    final duration = _durationSeconds > 0 ? _durationSeconds : 0.0;
-    final position = _positionSeconds.clamp(0.0, duration > 0 ? duration : 0.0);
-    final currentIdx = _nearestKfIndex(position);
-    final onKfIdx = _keyframeAtPlayheadIndex();
-    final onKf = onKfIdx >= 0;
-    final selected = onKf
-        ? keyframes[onKfIdx]
-        : (currentIdx >= 0 ? keyframes[currentIdx] : null);
-    final hasPrev = keyframes.any((k) => k.timeSec < position - 0.05);
-    final hasNext = keyframes.any((k) => k.timeSec > position + 0.05);
+    final shotIdx = _currentShotIndexAt(_positionSeconds);
+    if (shotIdx < 0 || shotIdx >= _shots.length) return const SizedBox.shrink();
+    final shot = _shots[shotIdx];
+    final override = _shotOverrides[shot.id];
+    final effectiveMode = override?.mode ??
+        (_config.selectedSpeakerId != null
+            ? ShotLockMode.specificPerson
+            : ShotLockMode.autoSpeaker);
+    final activePersonId = override?.mode == ShotLockMode.specificPerson
+        ? override?.speakerId
+        : (override == null ? _config.selectedSpeakerId : null);
 
     return Card(
       color: AppColors.surfaceLight,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // --- Player & keyframe control bar (CapCut style) -------------
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                IconButton(
-                  tooltip: _controller?.value.isPlaying == true
-                      ? 'Pause'
-                      : 'Play',
-                  onPressed: duration > 0
-                      ? () {
-                          final controller = _controller;
-                          if (controller == null) return;
-                          setState(() {
-                            controller.value.isPlaying
-                                ? controller.pause()
-                                : controller.play();
-                          });
-                        }
-                      : null,
-                  icon: Icon(
-                    _controller?.value.isPlaying == true
-                        ? Icons.pause
-                        : Icons.play_arrow,
+                Expanded(
+                  child: Text(
+                    '🎯 تثبيت الهدف في اللقطة #${shotIdx + 1}/${_shots.length} '
+                    '(${_formatTimeTenths(shot.startSec)} - ${_formatTimeTenths(shot.endSec)})',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                   ),
-                  visualDensity: VisualDensity.compact,
+                ),
+                if (_shotOverrides.containsKey(shot.id))
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE040FB).withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'مُخصّص',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFFE040FB),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Shot navigation & custom split/merge row
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _editorButton(
+                  icon: Icons.skip_previous,
+                  label: '‹ اللقطة السابقة',
+                  onPressed: _shots.length > 1 || _positionSeconds > 0.4
+                      ? () => _jumpShot(-1)
+                      : null,
+                ),
+                _editorButton(
+                  icon: Icons.content_cut,
+                  label: '✂️ تقسيم لقطة هنا',
+                  highlighted: true,
+                  onPressed: _splitShotAtPlayhead,
+                ),
+                if (_shots.length > 1)
+                  _editorButton(
+                    icon: Icons.merge_type,
+                    label: 'دمج اللقطة',
+                    onPressed: _mergeCurrentShot,
+                  ),
+                _editorButton(
+                  icon: Icons.skip_next,
+                  label: 'اللقطة التالية ›',
+                  onPressed:
+                      shotIdx + 1 < _shots.length ? () => _jumpShot(1) : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'اختر لمن تثبت الكاميرا أثناء هذه اللقطة:',
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ChoiceChip(
+                  avatar: const Icon(Icons.record_voice_over, size: 16),
+                  label: const Text(
+                    'المتكلم تلقائياً',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  selected: effectiveMode == ShotLockMode.autoSpeaker,
+                  onSelected: (_) => _setShotModeAutoSpeaker(shot),
+                ),
+                for (final profile in track.speakers)
+                  ChoiceChip(
+                    avatar: const Icon(Icons.person_pin_circle, size: 16),
+                    label: Text(
+                      'تثبيت: ${profile.label}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    selected: effectiveMode == ShotLockMode.specificPerson &&
+                        activePersonId == profile.id,
+                    onSelected: (_) => _setShotModePerson(shot, profile.id),
+                  ),
+                ChoiceChip(
+                  avatar: const Icon(Icons.lock_outline, size: 16),
+                  label: const Text(
+                    'تثبيت الكاميرا هنا طوال اللقطة',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  selected: effectiveMode == ShotLockMode.staticPosition,
+                  onSelected: (_) {
+                    final (cx, cy) = _currentSampledPosition(_positionSeconds);
+                    _setShotModeStaticPosition(shot, cx, cy);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'نصيحة: يمكنك تقسيم اللقطة عند أي ثانية بـ "✂️ تقسيم لقطة هنا" ثم اختيار الشخص أو الضغط على وجهه مباشرة لتثبيت الكاميرا عليه في هذه اللقطة فقط.',
+              style: TextStyle(fontSize: 10.5, color: AppColors.textTertiary),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Interactive Keyframe Timeline & Smooth Camera Control Panel.
+  Widget _buildKeyframeEditor() {
+    final keyframes = _workingKeyframes;
+    final currentIdx = _nearestKfIndex(_positionSeconds);
+    final selected = currentIdx >= 0 ? keyframes[currentIdx] : null;
+    final onPlayheadIdx = _keyframeAtPlayheadIndex();
+    final onKeyframe = onPlayheadIdx >= 0;
+    final duration = _durationSeconds;
+    final position =
+        duration > 0 ? _positionSeconds.clamp(0.0, duration) : 0.0;
+    final (currX, currY) = _currentSampledPosition(_positionSeconds);
+    final effectiveAspect = _effectiveCropAspect();
+    final controllerSize = _controller?.value.size;
+    final srcAspect =
+        controllerSize != null &&
+                controllerSize.width > 0 &&
+                controllerSize.height > 0
+            ? controllerSize.width / controllerSize.height
+            : 16 / 9;
+    final halfW = srcAspect > effectiveAspect
+        ? (effectiveAspect / srcAspect).clamp(0.05, 1.0) / 2
+        : 0.5;
+    final minX = halfW.clamp(0.0, 0.49);
+    final maxX = (1.0 - halfW).clamp(0.51, 1.0);
+    final sliderX = currX.clamp(minX, maxX);
+
+    return Card(
+      color: AppColors.surfaceLight,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Keyframes · ${keyframes.length}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
                 Text(
                   '${_formatTimeTenths(position)} / '
                   '${_formatTimeTenths(duration)}',
                   style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
                     fontFeatures: [FontFeature.tabularFigures()],
                   ),
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Previous keyframe',
-                  onPressed: hasPrev ? () => _jumpKeyframe(-1) : null,
-                  icon: const Text('⟨◆', style: TextStyle(fontSize: 14)),
-                  visualDensity: VisualDensity.compact,
-                ),
-                // The one smart keyframe button: add here, or delete the
-                // keyframe the playhead sits on.
-                ElevatedButton.icon(
-                  onPressed: duration > 0 ? _smartKeyframeToggle : null,
-                  icon: Icon(
-                    onKf ? Icons.bookmark_remove : Icons.add_circle,
-                    size: 18,
-                  ),
-                  label: Text(
-                    onKf ? '◆- Delete KF' : '◆+ Add KF',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: onKf
-                        ? const Color(0xFFFF5252)
-                        : const Color(0xFF00E5FF),
-                    foregroundColor: onKf ? Colors.white : Colors.black,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Next keyframe',
-                  onPressed: hasNext ? () => _jumpKeyframe(1) : null,
-                  icon: const Text('◆⟩', style: TextStyle(fontSize: 14)),
-                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),
             const SizedBox(height: 6),
-
-            // --- Scrubbable magnetic keyframe timeline --------------------
+            // Smooth Horizontal Camera Panning Slider
+            Row(
+              children: [
+                const Icon(Icons.swap_horiz, size: 16, color: Color(0xFFE040FB)),
+                const SizedBox(width: 6),
+                const Text(
+                  'تحريك الكاميرا:',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: sliderX,
+                    min: minX,
+                    max: maxX,
+                    onChangeStart: (_) {
+                      final c = _controller;
+                      if (c != null && c.value.isPlaying) c.pause();
+                    },
+                    onChanged: (newX) {
+                      _upsertManualKeyframeAt(_positionSeconds, newX, currY);
+                    },
+                  ),
+                ),
+                Text(
+                  '${(currX * 100).round()}%',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+            // Magnetic keyframe timeline
             _buildMagneticTimeline(
               keyframes: keyframes,
               duration: duration,
               position: position,
               currentIdx: currentIdx,
             ),
-            const SizedBox(height: 4),
-            const Text(
-              'Drag to scrub (snaps to keyframes) · AI ◆ cyan, manual ◆ gold, '
-              'active ◆ magenta · filled = cut, hollow = smooth · '
-              'double-tap video = place crop',
-              style: TextStyle(fontSize: 10, color: AppColors.textTertiary),
-            ),
-            const SizedBox(height: 8),
-
-            // --- Quick keyframe actions ------------------------------------
+            const SizedBox(height: 6),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
                 _editorButton(
-                  icon: selected != null && !selected.isCut
-                      ? Icons.waves
-                      : Icons.flash_on,
+                  icon: Icons.skip_previous,
+                  label: '‹ Prev',
+                  onPressed:
+                      keyframes.isNotEmpty ? () => _jumpKeyframe(-1) : null,
+                ),
+                _editorButton(
+                  icon: onKeyframe ? Icons.remove_circle_outline : Icons.add,
+                  label: onKeyframe ? '◆- Delete KF' : '◆+ Add KF',
+                  highlighted: onKeyframe,
+                  onPressed: _smartKeyframeToggle,
+                ),
+                _editorButton(
+                  icon: Icons.skip_next,
+                  label: 'Next ›',
+                  onPressed:
+                      keyframes.isNotEmpty ? () => _jumpKeyframe(1) : null,
+                ),
+                _editorButton(
+                  icon: (selected?.isCut ?? false)
+                      ? Icons.flash_on
+                      : Icons.timeline,
                   label: selected == null
-                      ? 'Cut / Smooth'
+                      ? 'Smooth 〰️'
                       : (selected.isCut ? 'Cut ⚡' : 'Smooth 〰️'),
                   highlighted: selected?.isCut ?? false,
                   onPressed:
@@ -1279,8 +1594,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
               ],
             ),
             const SizedBox(height: 8),
-
-            // --- Keyframe chips: tap seeks, × deletes instantly -----------
             if (keyframes.isNotEmpty)
               SizedBox(
                 height: 44,
@@ -1308,10 +1621,8 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
               )
             else
               const Text(
-                'No keyframes yet — drag the crop box on the video or press '
-                '"◆+ Add KF".',
-                style:
-                    TextStyle(fontSize: 11, color: AppColors.textTertiary),
+                'No keyframes yet — drag the camera or press "◆+ Add KF".',
+                style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
               ),
           ],
         ),
@@ -1319,8 +1630,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// Magnetic timeline strip: tap or finger-scrub to seek, snapping to the
-  /// nearest keyframe marker within 12 pixels with a haptic tick.
   Widget _buildMagneticTimeline({
     required List<FaceTrackPoint> keyframes,
     required double duration,
@@ -1347,7 +1656,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                 snapped = kf.timeSec;
               }
             }
-            // One haptic tick per newly-snapped marker, not per drag frame.
             if ((snapped - t).abs() > 1e-9 && snapped != _lastSnappedKfSec) {
               _lastSnappedKfSec = snapped;
               HapticFeedback.selectionClick();
@@ -1388,7 +1696,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// `m:ss.t` (tenths) so exact keyframe timing is readable at a glance.
   String _formatTimeTenths(double seconds) {
     if (!seconds.isFinite || seconds < 0) return '0:00.0';
     final whole = seconds.floor();
@@ -1410,8 +1717,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       style: OutlinedButton.styleFrom(
         visualDensity: VisualDensity.compact,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        foregroundColor:
-            highlighted ? const Color(0xFFE040FB) : null,
+        foregroundColor: highlighted ? const Color(0xFFE040FB) : null,
       ),
     );
   }
@@ -1445,7 +1751,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         leading: const Icon(Icons.face, color: Color(0xFFE040FB)),
         title: Text(
           'Speaker locked · ${track.facesDetectedCount} faces · '
-          '${track.keyframes.length} keyframes',
+          '${_workingKeyframes.length} keyframes · ${_shots.length} shots',
           style: const TextStyle(fontSize: 13),
         ),
         subtitle: Text(
@@ -1467,8 +1773,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final preset in AspectRatioPreset.values)
-              ChoiceChip(
+            for (final preset in AspectRatioPreset.values)              ChoiceChip(
                 avatar: Icon(preset.icon, size: 18),
                 label: Text(preset.shortLabel),
                 selected: _config.preset == preset,
@@ -1573,8 +1878,6 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// `45% .. 100%` video-fill slider with quick presets. Lower fill widens the
-  /// crop (more scene visible) and adds proportional black bars.
   Widget _buildFrameFillControl() {
     final fill = _config.frameFillClamped;
     final (outW, outH) = _config.outputSize;
@@ -1590,14 +1893,12 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         : 'Black bars: '
             '${(((outW - box.boxW) / 2) / outW * 100).toStringAsFixed(0)}% '
             'left + right';
-
     const presets = <(double, String)>[
       (1.0, '100% Full'),
       (0.8, '80%'),
       (0.65, '65%'),
       (0.5, '50%'),
     ];
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1650,8 +1951,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
     );
   }
 
-  /// `Auto Active Speaker` + one chip per detected person; tapping a face on
-  /// the preview selects the same person.
+  /// Global default speaker selector across the entire video.
   Widget _buildSpeakerSelector() {
     final track = _track;
     if (track == null || track.speakers.isEmpty) return const SizedBox.shrink();
@@ -1665,7 +1965,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Target Face / Speaker',
+          'وضع التتبع العام للفيديو بالكامل (Target Face / Speaker)',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
@@ -1681,7 +1981,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
                     ? Theme.of(context).colorScheme.primary
                     : null,
               ),
-              label: const Text('Auto Active Speaker'),
+              label: const Text('Auto Active Speaker (المتكلم تلقائياً)'),
               selected: selectedId == null,
               onSelected: (_) => _selectSpeaker(null),
             ),
@@ -1702,9 +2002,9 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          selectedId == null
-              ? 'Switches to whoever is speaking · tap a face to lock'
-              : 'Locked on $selectedLabel · tap a face to switch',
+          selectedLabel == null
+              ? 'الوضع العام: الكاميرا تتبع الشخص المتكلم تلقائياً وتتحرك معه بسلاسة.'
+              : 'الوضع العام: الكاميرا مثبتة على $selectedLabel طوال الفيديو.',
           style: const TextStyle(fontSize: 11, color: AppColors.textTertiary),
         ),
       ],
@@ -1712,8 +2012,7 @@ class _AutoReframeScreenState extends State<AutoReframeScreen> {
   }
 }
 
-/// One detected person drawn on the preview (average trajectory position at
-/// the current instant).
+/// One detected face at the current preview instant.
 class ReframeFaceMarker {
   final double normX;
   final double normY;
@@ -1728,9 +2027,6 @@ class ReframeFaceMarker {
   });
 }
 
-/// Live overlay: dimmed area outside the crop window, all detected faces with
-/// the selected speaker highlighted, black-bar bands for `frameFill`, and a
-/// "Speaker Locked" marker.
 class ReframeOverlayPainter extends CustomPainter {
   final double targetAspect;
   final int outW;
@@ -1758,8 +2054,6 @@ class ReframeOverlayPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.width <= 0 || size.height <= 0) return;
 
-    // Mirror the FFmpeg geometry exactly: effective aspect of the inner box
-    // after `frameFill`, then the source crop window, then the black bars.
     final fill = frameFill.clamp(0.45, 1.0);
     var boxW = outW;
     var boxH = outH;
@@ -1787,7 +2081,6 @@ class ReframeOverlayPainter extends CustomPainter {
     final faceTracking = style == AutoReframeStyle.smartFaceCrop;
     final centerX = faceTracking ? normX * size.width : size.width / 2;
     final centerY = faceTracking ? normY * size.height : size.height / 2;
-
     final left = (centerX - cropW / 2).clamp(0.0, size.width - cropW);
     final top = (centerY - cropH / 2).clamp(0.0, size.height - cropH);
     final cropRect = Rect.fromLTWH(left, top, cropW, cropH);
@@ -1797,7 +2090,10 @@ class ReframeOverlayPainter extends CustomPainter {
         ..fillType = PathFillType.evenOdd
         ..addRect(Offset.zero & size)
         ..addRect(cropRect);
-      canvas.drawPath(dimPath, Paint()..color = Colors.black.withValues(alpha: 0.55));
+      canvas.drawPath(
+        dimPath,
+        Paint()..color = Colors.black.withValues(alpha: 0.55),
+      );
     }
 
     final glow = Paint()
@@ -1806,6 +2102,7 @@ class ReframeOverlayPainter extends CustomPainter {
       ..strokeWidth = 5
       ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 6);
     canvas.drawRect(cropRect, glow);
+
     canvas.drawRect(
       cropRect,
       Paint()
@@ -1814,11 +2111,6 @@ class ReframeOverlayPainter extends CustomPainter {
         ..strokeWidth = 1.6,
     );
 
-    // Black bars added by `pad=...:black`, drawn at the exact final proportion
-    // inside the crop window (portrait → top/bottom, landscape → left/right).
-    // The preview must NOT hide the speaker's face with opaque bars: use a
-    // translucent letterbox band + dashed guide lines instead, so the full
-    // cropped area stays visible while dragging the box.
     final portrait = outH >= outW;
     final barFraction = (1 - (portrait ? boxH / outH : boxW / outW)) / 2;
     if (barFraction > 0.004) {
@@ -1883,7 +2175,6 @@ class ReframeOverlayPainter extends CustomPainter {
       }
     }
 
-    // Every detected person; the selected speaker gets a filled highlight.
     for (final face in faces) {
       final center = Offset(face.normX * size.width, face.normY * size.height);
       final color = face.locked
@@ -1892,8 +2183,7 @@ class ReframeOverlayPainter extends CustomPainter {
       canvas.drawCircle(
         center,
         15,
-        Paint()
-          ..color = color.withValues(alpha: face.locked ? 0.35 : 0.18),
+        Paint()..color = color.withValues(alpha: face.locked ? 0.35 : 0.18),
       );
       canvas.drawCircle(
         center,
@@ -1903,30 +2193,28 @@ class ReframeOverlayPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = face.locked ? 3 : 1.6,
       );
-      if (face.locked) {
-        final label = TextPainter(
-          text: TextSpan(
-            text: face.label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              backgroundColor: Color(0xAA9C27B0),
-            ),
+      final label = TextPainter(
+        text: TextSpan(
+          text: face.label.split(' ').take(2).join(' '),
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            backgroundColor:
+                face.locked ? const Color(0xCC9C27B0) : const Color(0xAA006064),
           ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        label.paint(
-          canvas,
-          Offset(
-            (center.dx - label.width / 2).clamp(0.0, size.width - label.width),
-            (center.dy + 18).clamp(0.0, size.height - label.height),
-          ),
-        );
-      }
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      label.paint(
+        canvas,
+        Offset(
+          (center.dx - label.width / 2).clamp(0.0, size.width - label.width),
+          (center.dy + 18).clamp(0.0, size.height - label.height),
+        ),
+      );
     }
 
-    // Crosshair at the actual tracked face center (the crop center).
     final faceCenter = Offset(centerX, centerY);
     final cross = Paint()
       ..color = const Color(0xFF00E5FF)
@@ -1964,7 +2252,6 @@ class ReframeOverlayPainter extends CustomPainter {
     }
   }
 
-  /// Dashed helper line for the letterbox guide in the preview.
   static void _drawDashedLine(
     Canvas canvas,
     Offset from,
@@ -2002,12 +2289,6 @@ class ReframeOverlayPainter extends CustomPainter {
   }
 }
 
-/// Timeline strip painting diamond keyframe markers.
-///
-/// * AI keyframes: cyan `#00E5FF`
-/// * manual/edited keyframes: amber `#FFD54F`
-/// * nearest/active keyframe: magenta `#E040FB` (drawn larger)
-/// * `isCut` keyframes are **filled** diamonds, smooth ones are **hollow**
 class KeyframeTimelinePainter extends CustomPainter {
   final List<FaceTrackPoint> keyframes;
   final double duration;
@@ -2034,7 +2315,6 @@ class KeyframeTimelinePainter extends CustomPainter {
         ..strokeWidth = 2,
     );
 
-    // Playhead marker.
     if (duration > 0) {
       final playX = (position / duration).clamp(0.0, 1.0) * size.width;
       canvas.drawLine(
@@ -2047,6 +2327,7 @@ class KeyframeTimelinePainter extends CustomPainter {
     }
 
     if (duration <= 0) return;
+
     for (var i = 0; i < keyframes.length; i++) {
       final kf = keyframes[i];
       final x = (kf.timeSec / duration).clamp(0.0, 1.0) * size.width;
@@ -2065,7 +2346,6 @@ class KeyframeTimelinePainter extends CustomPainter {
         ..close();
 
       if (kf.isCut) {
-        // Instant cut: filled diamond.
         canvas.drawPath(diamond, Paint()..color = color);
         if (selected) {
           canvas.drawPath(
@@ -2077,7 +2357,6 @@ class KeyframeTimelinePainter extends CustomPainter {
           );
         }
       } else {
-        // Smooth pan: hollow diamond.
         canvas.drawPath(
           diamond,
           Paint()
@@ -2102,13 +2381,16 @@ class KeyframeTimelinePainter extends CustomPainter {
     List<FaceTrackPoint> a,
     List<FaceTrackPoint> b,
   ) {
+    if (identical(a, b)) return true;
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (a[i].timeSec != b[i].timeSec ||
-          a[i].normX != b[i].normX ||
-          a[i].normY != b[i].normY ||
-          a[i].isCut != b[i].isCut ||
-          a[i].isManual != b[i].isManual) {
+      final x = a[i];
+      final y = b[i];
+      if (x.timeSec != y.timeSec ||
+          x.normX != y.normX ||
+          x.normY != y.normY ||
+          x.isCut != y.isCut ||
+          x.isManual != y.isManual) {
         return false;
       }
     }
