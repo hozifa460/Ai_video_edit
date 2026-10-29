@@ -1383,8 +1383,7 @@ class FaceDetectionService {
           if (rawCut) {
             var foregroundFaceContinuous = false;
             if (prevVisibleTracks.isNotEmpty &&
-                foregroundCandidates.isNotEmpty &&
-                foregroundCandidates.length == prevVisibleTracks.length) {
+                foregroundCandidates.isNotEmpty) {
               var matchedFaces = 0;
               var iouSum = 0.0;
               final usedPrev = <int>{};
@@ -1412,7 +1411,9 @@ class FaceDetectionService {
               }
               final meanIou = matchedFaces > 0 ? iouSum / matchedFaces : 0.0;
               if (matchedFaces == foregroundCandidates.length &&
-                  (!gridSceneCut || meanIou >= 0.44)) {
+                  ((foregroundCandidates.length == prevVisibleTracks.length &&
+                          (!gridSceneCut || meanIou >= 0.44)) ||
+                      meanIou >= 0.52)) {
                 foregroundFaceContinuous = true;
               }
             }
@@ -1744,20 +1745,39 @@ class FaceDetectionService {
         final visibleFacesCount = visibleFaces.length;
 
         // Only search for an anonymized pitch-black silhouette when there is a
-        // genuinely unoccupied horizontal panel (>= 28% of frame width) away
-        // from all visible speakers. A centered solo speaker (normX in
-        // 0.36..0.64) never runs silhouette detection on their own background.
+        // genuinely unoccupied split-screen panel away from all visible
+        // speakers, and restrict the candidate's X coordinate to that panel.
         var hasUnoccupiedPanelForSilhouette = visibleFacesCount == 0;
+        var allowedSilMinX = 0.0;
+        var allowedSilMaxX = 1.0;
         if (visibleFacesCount == 1) {
           final vx = visibleFaces.first.normX;
-          hasUnoccupiedPanelForSilhouette = vx < 0.36 || vx > 0.64;
+          if (vx < 0.32) {
+            hasUnoccupiedPanelForSilhouette = true;
+            allowedSilMinX = 0.52;
+            allowedSilMaxX = 1.0;
+          } else if (vx > 0.68) {
+            hasUnoccupiedPanelForSilhouette = true;
+            allowedSilMinX = 0.0;
+            allowedSilMaxX = 0.48;
+          }
         } else if (visibleFacesCount == 2) {
           final sortedX = [visibleFaces[0].normX, visibleFaces[1].normX]..sort();
           final leftGap = sortedX[0];
-          final midGap = sortedX[1] - sortedX[0];
           final rightGap = 1.0 - sortedX[1];
-          hasUnoccupiedPanelForSilhouette =
-              leftGap >= 0.30 || midGap >= 0.36 || rightGap >= 0.30;
+          if (sortedX[0] <= 0.29 && sortedX[1] >= 0.71) {
+            hasUnoccupiedPanelForSilhouette = true;
+            allowedSilMinX = 0.35;
+            allowedSilMaxX = 0.65;
+          } else if (sortedX[1] <= 0.62 && rightGap >= 0.35) {
+            hasUnoccupiedPanelForSilhouette = true;
+            allowedSilMinX = 0.68;
+            allowedSilMaxX = 1.0;
+          } else if (sortedX[0] >= 0.38 && leftGap >= 0.35) {
+            hasUnoccupiedPanelForSilhouette = true;
+            allowedSilMinX = 0.0;
+            allowedSilMaxX = 0.32;
+          }
         }
 
         SilhouetteSubject? subject;
@@ -1772,6 +1792,8 @@ class FaceDetectionService {
             excludeRects: faceBoxes,
           );
           if (candidateSubject != null &&
+              candidateSubject.normX >= allowedSilMinX &&
+              candidateSubject.normX <= allowedSilMaxX &&
               visibleFaces.every(
                 (vf) => (vf.normX - candidateSubject.normX).abs() >= 0.22,
               )) {
@@ -2035,6 +2057,25 @@ class FaceDetectionService {
   // Pass 1.5 & Pass 2: Whole-Video Voice Enrollment & Deterministic Turn Engine
   // ---------------------------------------------------------------------------
 
+  static bool _tracksOverlapInTime(_SpeakerTrack a, _SpeakerTrack b) {
+    if (identical(a, b)) return false;
+    var i = 0;
+    var j = 0;
+    final ptsA = a.points;
+    final ptsB = b.points;
+    while (i < ptsA.length && j < ptsB.length) {
+      final ta = ptsA[i].timeSec;
+      final tb = ptsB[j].timeSec;
+      if ((ta - tb).abs() <= 0.15) return true;
+      if (ta < tb) {
+        i++;
+      } else {
+        j++;
+      }
+    }
+    return false;
+  }
+
   static void _enrollGlobalVoiceAndAppearance(
     List<_FrameObservation> observations,
     Map<int, _SpeakerTrack> tracks,
@@ -2053,9 +2094,10 @@ class FaceDetectionService {
       return s / t.points.length;
     }
 
-    // Group visible tracks across shots by head/torso appearance similarity or
-    // close horizontal slot so a person moving from a solo shot (x=0.38) to a
-    // split-screen panel (x=0.17) carries their enrolled voice print.
+    // Group visible tracks across DIFFERENT (temporally non-overlapping) shots
+    // by head/torso appearance similarity so a person moving from a solo shot
+    // to a split-screen panel carries their enrolled voice print, while never
+    // merging two co-present speakers in the same shot.
     final trackToGroup = <int, int>{};
     final groups = <List<_SpeakerTrack>>[];
     for (final track in visibleTracks) {
@@ -2063,6 +2105,9 @@ class FaceDetectionService {
       var matchedGroup = -1;
       var bestSim = 0.0;
       for (var g = 0; g < groups.length; g++) {
+        if (groups[g].any((m) => _tracksOverlapInTime(m, track))) {
+          continue;
+        }
         for (final member in groups[g]) {
           final torsoSim = _signatureSimilarity(
             member.torsoSignature,
@@ -2073,8 +2118,8 @@ class FaceDetectionService {
             track.headSignature,
           );
           final appSim = 0.62 * torsoSim + 0.38 * headSim;
-          final sameSlot = (tx - avgXOf(member)).abs() < 0.14;
-          if ((appSim >= 0.87 || (sameSlot && appSim >= 0.72)) &&
+          final sameSlot = (tx - avgXOf(member)).abs() < 0.12;
+          if ((appSim >= 0.88 || (sameSlot && appSim >= 0.80)) &&
               appSim > bestSim) {
             bestSim = appSim;
             matchedGroup = g;
@@ -2269,9 +2314,17 @@ class FaceDetectionService {
           trackCounts[c.track] = (trackCounts[c.track] ?? 0) + 1;
         }
       }
-      final minPresence = shotObs.length >= 4 ? 2 : 1;
+      final minVisPresence = shotObs.length >= 12
+          ? max(2, (shotObs.length * 0.15).round())
+          : (shotObs.length >= 4 ? 2 : 1);
+      final hasVisibleInShot = trackCounts.entries
+          .any((e) => !e.key.isSilhouette && e.value >= minVisPresence);
+      final minSilPresence = hasVisibleInShot
+          ? max(minVisPresence, (shotObs.length * 0.30).round())
+          : minVisPresence;
       final shotTracks = trackCounts.entries
-          .where((e) => e.value >= minPresence)
+          .where((e) =>
+              e.value >= (e.key.isSilhouette ? minSilPresence : minVisPresence))
           .map((e) => e.key)
           .toList();
 
@@ -2406,6 +2459,17 @@ class FaceDetectionService {
         return count > 0 ? sum / count : 0.0;
       }
 
+      bool isTrackPresentNearFrame(_SpeakerTrack track, int centerK) {
+        final w0 = max(0, centerK - 2);
+        final w1 = min(nFrames - 1, centerK + 2);
+        for (var j = w0; j <= w1; j++) {
+          for (final c in shotObs[j].candidates) {
+            if (identical(c.track, track)) return true;
+          }
+        }
+        return false;
+      }
+
       final rawEvidence = <_SpeakerTrack, List<double>>{
         for (final t in shotTracks) t: List<double>.filled(nFrames, 0.0),
       };
@@ -2446,6 +2510,10 @@ class FaceDetectionService {
           }
 
           if (t.isSilhouette) {
+            if (!isTrackPresentNearFrame(t, k)) {
+              rawEvidence[t]![k] = 0.0;
+              continue;
+            }
             final silVoiceMatch =
                 t.voiceAffinityForCluster(obs.audio.voiceClusterId);
             final silMot = cand?.silMotion ?? 0.0;
@@ -2484,7 +2552,7 @@ class FaceDetectionService {
       }
 
       // Compute 5-frame (1.0s) centered sliding-window evidence + lip-open
-      // oscillation cadence bonus for each track across the shot.
+      // oscillation cadence bonus (gated by actual lip movement) for each track.
       final winEvidence = <_SpeakerTrack, List<double>>{
         for (final t in shotTracks) t: List<double>.filled(nFrames, 0.0),
       };
@@ -2514,8 +2582,9 @@ class FaceDetectionService {
             winEvidence[t]![k] = 0.0;
             continue;
           }
+          final meanRaw = sum / voicedCount;
           var cadenceBonus = 0.0;
-          if (opens.length >= 3) {
+          if (opens.length >= 3 && meanRaw >= 0.04) {
             var meanO = 0.0;
             for (final o in opens) {
               meanO += o;
@@ -2526,9 +2595,10 @@ class FaceDetectionService {
               sq += (o - meanO) * (o - meanO);
             }
             final stdO = sqrt(sq / opens.length);
-            cadenceBonus = (stdO / 0.020).clamp(0.0, 0.22);
+            final activityGate = (meanRaw / 0.22).clamp(0.0, 1.0);
+            cadenceBonus = (stdO / 0.020).clamp(0.0, 0.22) * activityGate;
           }
-          winEvidence[t]![k] = (sum / voicedCount) + cadenceBonus;
+          winEvidence[t]![k] = meanRaw + cadenceBonus;
         }
       }
 
@@ -2552,9 +2622,9 @@ class FaceDetectionService {
         for (final t in shotTracks) t: 0.0,
       };
       var firstVoicedSeen = 0;
-      for (var k = 0; k < nFrames && firstVoicedSeen < 6; k++) {
+      for (var k = 0; k < nFrames && firstVoicedSeen < 7; k++) {
         if (!voicedFlags[k]) {
-          if (firstVoicedSeen >= 2) break;
+          if (firstVoicedSeen >= 4) break;
           continue;
         }
         firstVoicedSeen++;
@@ -2577,12 +2647,22 @@ class FaceDetectionService {
       final assignedWinners =
           List<_SpeakerTrack>.filled(nFrames, currentLocked);
       var framesOnCurrent = 0;
+      var voicedFramesOnCurrent = 0;
 
       for (var k = 0; k < nFrames; k++) {
         if (!voicedFlags[k]) {
           // Scenario 5: Silence Freeze — never switch speakers during silence.
           assignedWinners[k] = currentLocked!;
           framesOnCurrent++;
+          continue;
+        }
+
+        // Never initiate a new speaker switch in the final <4 frames (<0.8s)
+        // right before a shot ends.
+        if (nFrames - k < 4 && framesOnCurrent >= 1) {
+          assignedWinners[k] = currentLocked!;
+          framesOnCurrent++;
+          voicedFramesOnCurrent++;
           continue;
         }
 
@@ -2609,18 +2689,40 @@ class FaceDetectionService {
 
           final requiredTakeover = min(4, max(2, voicedLookahead - 1));
           if (framesOnCurrent >= 4 &&
+              voicedFramesOnCurrent >= 3 &&
               candScore >= 0.22 &&
               candScore > currScore * 1.18 + 0.05 &&
               takeoverFrames >= requiredTakeover) {
             currentLocked = candidateLeader;
             framesOnCurrent = 1;
+            voicedFramesOnCurrent = 1;
           } else {
             framesOnCurrent++;
+            voicedFramesOnCurrent++;
           }
         } else {
           framesOnCurrent++;
+          voicedFramesOnCurrent++;
         }
         assignedWinners[k] = currentLocked!;
+      }
+
+      // If an initial false-start turn at the very beginning of the shot lasted
+      // fewer than 5 frames (<1.0s) before switching to a sustained speaker,
+      // backfill frame 0..firstSwitch-1 so the shot starts cleanly on the
+      // main speaker without a sub-second jump.
+      var firstSwitchIdx = -1;
+      for (var k = 1; k < nFrames; k++) {
+        if (!identical(assignedWinners[k], assignedWinners[0])) {
+          firstSwitchIdx = k;
+          break;
+        }
+      }
+      if (firstSwitchIdx > 0 && firstSwitchIdx < 5) {
+        final replacement = assignedWinners[firstSwitchIdx];
+        for (var k = 0; k < firstSwitchIdx; k++) {
+          assignedWinners[k] = replacement;
+        }
       }
 
       // Compute each track's median X/Y in this shot and apply Split-Screen
@@ -2740,6 +2842,7 @@ class FaceDetectionService {
   ) {
     if (nx1 <= nx0 + 0.015 || ny1 <= ny0 + 0.015) return null;
     final sig = Float64List(12);
+    var totalEnergy = 0.0;
     for (var qy = 0; qy < 2; qy++) {
       for (var qx = 0; qx < 2; qx++) {
         var rSum = 0.0;
@@ -2764,20 +2867,16 @@ class FaceDetectionService {
         }
         final baseIdx = (qy * 2 + qx) * 3;
         const count = subN * subN;
-        sig[baseIdx] = rSum / count;
-        sig[baseIdx + 1] = gSum / count;
-        sig[baseIdx + 2] = bSum / count;
+        final r = rSum / count;
+        final g = gSum / count;
+        final b = bSum / count;
+        sig[baseIdx] = r;
+        sig[baseIdx + 1] = g;
+        sig[baseIdx + 2] = b;
+        totalEnergy += r + g + b;
       }
     }
-    var norm = 0.0;
-    for (var i = 0; i < sig.length; i++) {
-      norm += sig[i] * sig[i];
-    }
-    norm = sqrt(norm);
-    if (norm < 1e-6) return null;
-    for (var i = 0; i < sig.length; i++) {
-      sig[i] /= norm;
-    }
+    if (totalEnergy < 1e-5) return null;
     return sig;
   }
 
@@ -2788,27 +2887,21 @@ class FaceDetectionService {
   ) {
     if (oldSig == null || oldSig.length != newSig.length) return newSig;
     final out = Float64List(newSig.length);
-    var norm = 0.0;
     for (var i = 0; i < out.length; i++) {
       out[i] = (1 - alpha) * oldSig[i] + alpha * newSig[i];
-      norm += out[i] * out[i];
-    }
-    norm = sqrt(norm);
-    if (norm > 1e-6) {
-      for (var i = 0; i < out.length; i++) {
-        out[i] /= norm;
-      }
     }
     return out;
   }
 
   static double _signatureSimilarity(Float64List? a, Float64List? b) {
-    if (a == null || b == null || a.length != b.length) return 0.0;
-    var dot = 0.0;
+    if (a == null || b == null || a.length != b.length || a.isEmpty) return 0.0;
+    var sqSum = 0.0;
     for (var i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
+      final d = a[i] - b[i];
+      sqSum += d * d;
     }
-    return dot.clamp(0.0, 1.0);
+    final rms = sqrt(sqSum / a.length);
+    return (1.0 - rms * 3.0).clamp(0.0, 1.0);
   }
 
   static ({double cx, double cy})? _coastUnseenTrackViaTorso({
@@ -3297,9 +3390,32 @@ class FaceDetectionService {
         if (topFraction > silhouetteMaxTopFraction) continue;
         if (boxH / height < silhouetteMinHeightFraction) continue;
         if (boxW / width < silhouetteMinWidthFraction) continue;
+        if (boxW / width > 0.48) continue;
 
         final fillRatio = area / (boxW * boxH);
         if (fillRatio < 0.32) continue;
+
+        // Verify the candidate cluster is surrounded by a non-dark local
+        // background inside its own horizontal neighborhood, not part of a
+        // wide dark backdrop on one side of the frame.
+        final padX = max(6, width ~/ 7);
+        final lx0 = max(x0, cMinX - padX);
+        final lx1 = min(x1, cMaxX + 1 + padX);
+        var localBgSum = 0;
+        var localBgCount = 0;
+        for (var lgy = y0; lgy < y1; lgy++) {
+          for (var lgx = lx0; lgx < lx1; lgx++) {
+            final lIdx = lgy * width + lgx;
+            if (mask[lIdx] == 0 && excluded[lIdx] == 0) {
+              localBgSum += luma[lIdx];
+              localBgCount++;
+            }
+          }
+        }
+        if (localBgCount < 8 ||
+            localBgSum / localBgCount < silhouetteMinBackgroundLuma) {
+          continue;
+        }
 
         if (area > bestArea) {
           bestArea = area;
@@ -3637,11 +3753,16 @@ class FaceDetectionService {
 
     // Gate static-JPEG landmark/contour jitter by actual lip pixel change when
     // pixel grids are available: if the lip pixels did not move (pixelDelta <
-    // 0.003), landmark noise on a silent face cannot inflate rawVisualDelta.
+    // 0.003), landmark noise on a silent face cannot inflate rawVisualDelta or
+    // lipOpen oscillation cadence.
     final double rawVisualDelta;
     if (hasPixelGrids && hasPrev && prevGrid != null) {
       if (pixelDelta < 0.0030) {
-        rawVisualDelta = pixelDelta + min(0.0020, (contourDelta + geomDelta) * 0.20);
+        rawVisualDelta =
+            pixelDelta + min(0.0020, (contourDelta + geomDelta) * 0.20);
+        if (track.lipOpenHistory.isNotEmpty) {
+          oralOpen = track.lipOpenHistory.last;
+        }
       } else {
         rawVisualDelta = contourOpen != null
             ? (contourDelta * 0.45 + geomDelta * 0.15 + pixelDelta * 0.75)
@@ -4088,13 +4209,18 @@ class FaceDetectionService {
       final trackX = avgXOf([track]);
       List<_SpeakerTrack>? target;
       for (final group in groups) {
+        if (group.any((m) => _tracksOverlapInTime(m, track))) {
+          continue;
+        }
         final sameSilhouette = group.first.isSilhouette == track.isSilhouette;
         final closeX = (trackX - avgXOf(group)).abs() < profileMergeDistance;
         final torsoSim = _signatureSimilarity(
           group.first.torsoSignature,
           track.torsoSignature,
         );
-        if (sameSilhouette && (closeX || torsoSim >= 0.88)) {
+        if (sameSilhouette &&
+            ((closeX && (torsoSim >= 0.78 || track.isSilhouette)) ||
+                torsoSim >= 0.88)) {
           target = group;
           break;
         }
@@ -4113,7 +4239,7 @@ class FaceDetectionService {
     final profiles = <DetectedSpeakerProfile>[];
     final usedLabels = <String>{};
     for (var i = 0; i < kept.length; i++) {
-      final points = <FaceTrackPoint>[];
+      final rawMerged = <FaceTrackPoint>[];
       var totalHits = 0;
       var totalSpeakingHits = 0;
       int? dominantVoice;
@@ -4122,10 +4248,17 @@ class FaceDetectionService {
         totalSpeakingHits += track.speakingHitCount;
         dominantVoice ??= track.dominantVoiceClusterId;
         for (final p in track.points) {
-          points.add(p.copyWith(speakerId: i));
+          rawMerged.add(p.copyWith(speakerId: i));
         }
       }
-      points.sort((a, b) => a.timeSec.compareTo(b.timeSec));
+      rawMerged.sort((a, b) => a.timeSec.compareTo(b.timeSec));
+      final points = <FaceTrackPoint>[];
+      for (final pt in rawMerged) {
+        if (points.isNotEmpty && (pt.timeSec - points.last.timeSec).abs() < 0.02) {
+          continue;
+        }
+        points.add(pt);
+      }
       var xTotal = 0.0;
       var yTotal = 0.0;
       var wTotal = 0.0;

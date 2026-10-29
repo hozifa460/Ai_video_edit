@@ -1792,6 +1792,32 @@ void main() {
       expect(kfs[1].normX, closeTo(0.78, 1e-6));
       expect(kfs[1].isCut, isTrue);
     });
+
+    test('detectSilhouetteOrMotionSubject rejects wide dark room backdrop on half the frame', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+
+      // Left half bright (luma 135), right 55% completely dark wall (luma 10).
+      for (var gy = 0; gy < h; gy++) {
+        for (var gx = 0; gx < w; gx++) {
+          final o = (gy * w + gx) * 4;
+          final v = gx < 36 ? 135 : 10;
+          rgba[o] = v;
+          rgba[o + 1] = v;
+          rgba[o + 2] = v;
+          rgba[o + 3] = 255;
+        }
+      }
+
+      final subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+        rgba,
+        w,
+        h,
+        null,
+      );
+      expect(subject, isNull);
+    });
   });
 }
 
