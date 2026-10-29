@@ -253,15 +253,15 @@ class _VoiceCluster {
   double distanceTo(AudioFrameFeatures f) {
     var pitchDist = 0.0;
     if (f.pitchHz > 65 && pitchHz > 65) {
-      pitchDist = (log(f.pitchHz / pitchHz) / ln2).abs() * 1.45;
+      pitchDist = (log(f.pitchHz / pitchHz) / ln2).abs() * 1.55;
     } else {
-      pitchDist = 0.25;
+      pitchDist = 0.22;
     }
-    final bandDist = ((f.lowBandRatio - lowBand).abs() * 1.4 +
-            (f.midBandRatio - midBand).abs() * 1.2 +
-            (f.highBandRatio - highBand).abs() * 1.1) *
-        0.95;
-    return pitchDist + bandDist;
+    final bandDist = ((f.lowBandRatio - lowBand).abs() * 1.2 +
+            (f.midBandRatio - midBand).abs() * 1.0 +
+            (f.highBandRatio - highBand).abs() * 0.9) *
+        0.55;
+    return pitchDist * 0.75 + bandDist * 0.25;
   }
 
   void update(AudioFrameFeatures f, double nowSec) {
@@ -869,43 +869,101 @@ class FaceDetectionService {
     final mP15 = sortedM[(sortedM.length * 0.15).floor()];
     final mP90 = max(mP15 + 1e-4, sortedM[(sortedM.length * 0.90).floor()]);
 
+    final normEnergies = List<double>.filled(frameCount, 0.0);
+    final normMods = List<double>.filled(frameCount, 0.0);
+    final voicedFlags = List<bool>.filled(frameCount, false);
+    for (var f = 0; f < frameCount; f++) {
+      final normE = ((rawEnergies[f] - eP15 * 0.85) / (eP90 - eP15 * 0.85))
+          .clamp(0.0, 1.0);
+      final normM = ((rawMods[f] - mP15 * 0.80) / (mP90 - mP15 * 0.80))
+          .clamp(0.0, 1.0);
+      normEnergies[f] = normE;
+      normMods[f] = normM;
+      voicedFlags[f] = (normE >= 0.16 && normM >= 0.10) ||
+          normE >= 0.28 ||
+          (normE >= 0.12 && pitchConfs[f] >= 0.30);
+    }
+
+    // Smooth voiced pitch and spectral ratios over a rolling 1.2s (6-frame)
+    // turn window so vowel/consonant transitions of the same speaker stay on
+    // one consistent voice cluster ID.
+    final smoothedPitches = List<double>.filled(frameCount, 0.0);
+    final smoothedLow = List<double>.filled(frameCount, 0.33);
+    final smoothedMid = List<double>.filled(frameCount, 0.34);
+    final smoothedHigh = List<double>.filled(frameCount, 0.33);
+    for (var f = 0; f < frameCount; f++) {
+      final w0 = max(0, f - 2);
+      final w1 = min(frameCount - 1, f + 3);
+      final winPitches = <double>[];
+      var wLow = 0.0;
+      var wMid = 0.0;
+      var wHigh = 0.0;
+      var wSum = 0.0;
+      for (var j = w0; j <= w1; j++) {
+        if (!voicedFlags[j]) continue;
+        final weight = 0.25 + normEnergies[j];
+        wLow += lowBands[j] * weight;
+        wMid += midBands[j] * weight;
+        wHigh += highBands[j] * weight;
+        wSum += weight;
+        if (pitches[j] > 65) {
+          winPitches.add(pitches[j]);
+        }
+      }
+      if (winPitches.isNotEmpty) {
+        winPitches.sort();
+        smoothedPitches[f] = winPitches[winPitches.length ~/ 2];
+      } else {
+        smoothedPitches[f] = pitches[f];
+      }
+      if (wSum > 0) {
+        smoothedLow[f] = wLow / wSum;
+        smoothedMid[f] = wMid / wSum;
+        smoothedHigh[f] = wHigh / wSum;
+      } else {
+        smoothedLow[f] = lowBands[f];
+        smoothedMid[f] = midBands[f];
+        smoothedHigh[f] = highBands[f];
+      }
+    }
+
     final clusters = <_VoiceCluster>[];
-    const maxClusters = 6;
-    const clusterMergeThreshold = 0.34;
+    const maxClusters = 4;
+    const clusterMergeThreshold = 0.28;
     var activeClusterId = -1;
     var activeClusterRun = 0;
 
     final out = <AudioFrameFeatures>[];
     for (var f = 0; f < frameCount; f++) {
       final nowSec = f / sampleFps;
-      final normE = ((rawEnergies[f] - eP15 * 0.85) / (eP90 - eP15 * 0.85))
-          .clamp(0.0, 1.0);
-      final normM = ((rawMods[f] - mP15 * 0.80) / (mP90 - mP15 * 0.80))
-          .clamp(0.0, 1.0);
-      final voiced = (normE >= 0.16 && normM >= 0.10) ||
-          normE >= 0.28 ||
-          (normE >= 0.12 && pitchConfs[f] >= 0.30);
+      final normE = normEnergies[f];
+      final normM = normMods[f];
+      final voiced = voicedFlags[f];
+      final sPitch = smoothedPitches[f];
+      final sLow = smoothedLow[f];
+      final sMid = smoothedMid[f];
+      final sHigh = smoothedHigh[f];
 
       final tempFeature = AudioFrameFeatures(
         speechEnergy: normE,
         syllableModulation: normM,
-        pitchHz: pitches[f],
+        pitchHz: sPitch,
         pitchConfidence: pitchConfs[f],
-        lowBandRatio: lowBands[f],
-        midBandRatio: midBands[f],
-        highBandRatio: highBands[f],
+        lowBandRatio: sLow,
+        midBandRatio: sMid,
+        highBandRatio: sHigh,
         isVoicedSpeech: voiced,
       );
 
       var assignedCluster = -1;
-      if (voiced && (pitches[f] > 65 || normE >= 0.25)) {
+      if (voiced && (sPitch > 65 || normE >= 0.25)) {
         if (clusters.isEmpty) {
           final first = _VoiceCluster(
             id: 0,
-            pitchHz: pitches[f] > 65 ? pitches[f] : 145.0,
-            lowBand: lowBands[f],
-            midBand: midBands[f],
-            highBand: highBands[f],
+            pitchHz: sPitch > 65 ? sPitch : 145.0,
+            lowBand: sLow,
+            midBand: sMid,
+            highBand: sHigh,
           )..lastSeenSec = nowSec;
           clusters.add(first);
           assignedCluster = 0;
@@ -916,7 +974,7 @@ class FaceDetectionService {
           var bestDist = double.infinity;
           for (final c in clusters) {
             var d = c.distanceTo(tempFeature);
-            if (c.id == activeClusterId) d *= 0.84;
+            if (c.id == activeClusterId) d *= 0.80;
             if (d < bestDist) {
               bestDist = d;
               bestCluster = c;
@@ -927,8 +985,8 @@ class FaceDetectionService {
                   clusters.length >= maxClusters)) {
             if (activeClusterId >= 0 &&
                 bestCluster.id != activeClusterId &&
-                activeClusterRun < 2 &&
-                bestDist > clusterMergeThreshold * 0.65) {
+                activeClusterRun < 3 &&
+                bestDist > clusterMergeThreshold * 0.60) {
               assignedCluster = activeClusterId;
               clusters[activeClusterId].update(tempFeature, nowSec);
               activeClusterRun++;
@@ -945,10 +1003,10 @@ class FaceDetectionService {
           } else {
             final created = _VoiceCluster(
               id: clusters.length,
-              pitchHz: pitches[f] > 65 ? pitches[f] : 150.0,
-              lowBand: lowBands[f],
-              midBand: midBands[f],
-              highBand: highBands[f],
+              pitchHz: sPitch > 65 ? sPitch : 150.0,
+              lowBand: sLow,
+              midBand: sMid,
+              highBand: sHigh,
             )..lastSeenSec = nowSec;
             clusters.add(created);
             assignedCluster = created.id;
@@ -964,29 +1022,47 @@ class FaceDetectionService {
         AudioFrameFeatures(
           speechEnergy: normE,
           syllableModulation: normM,
-          pitchHz: pitches[f],
+          pitchHz: sPitch > 65 ? sPitch : pitches[f],
           pitchConfidence: pitchConfs[f],
-          lowBandRatio: lowBands[f],
-          midBandRatio: midBands[f],
-          highBandRatio: highBands[f],
+          lowBandRatio: sLow,
+          midBandRatio: sMid,
+          highBandRatio: sHigh,
           isVoicedSpeech: voiced,
           voiceClusterId: assignedCluster,
         ),
       );
     }
 
-    // 3-frame continuity smoothing on voiceClusterId so single-frame pitch
-    // jitter never splits a sentence mid-word.
-    for (var f = 1; f + 1 < out.length; f++) {
-      final prev = out[f - 1];
+    // 5-frame majority smoothing on voiceClusterId so isolated pitch spikes
+    // never split a speaker's turn mid-sentence.
+    final smoothedIds = List<int>.generate(
+      out.length,
+      (idx) => out[idx].voiceClusterId,
+    );
+    for (var f = 0; f < out.length; f++) {
+      if (!out[f].isVoicedSpeech || out[f].voiceClusterId < 0) continue;
+      final counts = <int, int>{};
+      final w0 = max(0, f - 2);
+      final w1 = min(out.length - 1, f + 2);
+      for (var j = w0; j <= w1; j++) {
+        final cid = out[j].voiceClusterId;
+        if (out[j].isVoicedSpeech && cid >= 0) {
+          counts[cid] = (counts[cid] ?? 0) + 1;
+        }
+      }
+      var bestCid = out[f].voiceClusterId;
+      var bestCnt = counts[bestCid] ?? 0;
+      counts.forEach((cid, cnt) {
+        if (cnt > bestCnt) {
+          bestCnt = cnt;
+          bestCid = cid;
+        }
+      });
+      smoothedIds[f] = bestCid;
+    }
+    for (var f = 0; f < out.length; f++) {
       final curr = out[f];
-      final next = out[f + 1];
-      if (curr.isVoicedSpeech &&
-          prev.isVoicedSpeech &&
-          next.isVoicedSpeech &&
-          prev.voiceClusterId >= 0 &&
-          prev.voiceClusterId == next.voiceClusterId &&
-          curr.voiceClusterId != prev.voiceClusterId) {
+      if (curr.voiceClusterId != smoothedIds[f]) {
         out[f] = AudioFrameFeatures(
           speechEnergy: curr.speechEnergy,
           syllableModulation: curr.syllableModulation,
@@ -996,7 +1072,7 @@ class FaceDetectionService {
           midBandRatio: curr.midBandRatio,
           highBandRatio: curr.highBandRatio,
           isVoicedSpeech: curr.isVoicedSpeech,
-          voiceClusterId: prev.voiceClusterId,
+          voiceClusterId: smoothedIds[f],
         );
       }
     }
@@ -1134,7 +1210,7 @@ class FaceDetectionService {
       );
 
       final expectedFrameCount = max(1, (clipDuration * sampleFps).ceil());
-      final audioFuture = _extractAndAnalyzeAudio(
+      final audioFeaturesList = await _extractAndAnalyzeAudio(
         videoPath: videoPath,
         tempDirPath: framesDir.path,
         startSec: startSec,
@@ -1151,7 +1227,7 @@ class FaceDetectionService {
       final scdetCommand =
           '-ss ${startSec.toStringAsFixed(3)} '
           '-t ${clipDuration.toStringAsFixed(3)} -i "$videoPath" '
-          '-vf "scale=960:-2:flags=fast_bilinear,scdet=t=12,fps=$sampleFps:round=up" -q:v 3 '
+          '-vf "scale=960:-2:flags=fast_bilinear,scdet=t=18,fps=$sampleFps:round=up" -q:v 3 '
           '-y "${framesDir.path}/frame_%04d.jpg"';
       var session = await FFmpegKit.execute(scdetCommand);
       if (!ReturnCode.isSuccess(await session.getReturnCode())) {
@@ -1175,17 +1251,21 @@ class FaceDetectionService {
         final logs = await session.getAllLogsAsString();
         if (logs != null && logs.isNotEmpty) {
           final reg = RegExp(r'lavfi\.scd\.time:\s*([0-9]+(?:\.[0-9]+)?)');
+          final rawCuts = <double>[];
           for (final m in reg.allMatches(logs)) {
             final rel = double.tryParse(m.group(1) ?? '');
-            if (rel != null && rel > 0.04) {
-              exactCutTimes.add(startSec + rel);
+            if (rel != null && rel > 0.08) {
+              rawCuts.add(startSec + rel);
             }
           }
-          exactCutTimes.sort();
+          rawCuts.sort();
+          for (final c in rawCuts) {
+            if (exactCutTimes.isEmpty || c - exactCutTimes.last >= 0.25) {
+              exactCutTimes.add(c);
+            }
+          }
         }
       } catch (_) {}
-
-      final audioFeaturesList = await audioFuture;
 
       final frames = await framesDir
           .list()
@@ -1211,7 +1291,9 @@ class FaceDetectionService {
       var silhouetteHits = 0;
       Uint8List? prevGridBytes;
       Uint8List? prevMouthGridBytes;
-      _SpeakerTrack? lastPrimaryFaceTrack;
+      var prevVisibleTracks = <_SpeakerTrack>[];
+      var nextScdIdx = 0;
+      var lastEmittedTimeSec = startSec - 0.001;
       final cropBmpPath = '${framesDir.path}/face_crop.bmp';
 
       final minFaceHeight = imgHeight * 0.062;
@@ -1220,7 +1302,7 @@ class FaceDetectionService {
       for (var i = 0; i < frames.length; i++) {
         final rawTimeSec = startSec + i / sampleFps;
         final prevTimeSec = i > 0 ? startSec + (i - 1) / sampleFps : startSec;
-        var timeSec = rawTimeSec;
+        var timeSec = max(rawTimeSec, lastEmittedTimeSec + 0.02);
         final audioFrame = i < audioFeaturesList.length
             ? audioFeaturesList[i]
             : const AudioFrameFeatures();
@@ -1255,60 +1337,6 @@ class FaceDetectionService {
           if (area > maxFaceArea) maxFaceArea = area;
         }
 
-        double? matchedScdTime;
-        if (i > 0) {
-          for (final scdT in exactCutTimes) {
-            if (scdT >= prevTimeSec - 0.04 && scdT <= rawTimeSec + 0.04) {
-              matchedScdTime = scdT;
-              break;
-            }
-          }
-        }
-
-        var cut = false;
-        if (grid != null) {
-          final rawCut = matchedScdTime != null ||
-              isSceneChange(
-                prevGridBytes,
-                grid,
-                silhouetteGridWidth,
-                silhouetteGridHeight,
-              );
-          if (rawCut) {
-            var foregroundFaceContinuous = false;
-            if (matchedScdTime == null &&
-                lastPrimaryFaceTrack != null &&
-                !lastPrimaryFaceTrack.isSilhouette &&
-                (timeSec - lastPrimaryFaceTrack.lastSeenSec) <= 0.7 &&
-                sortedFaces.isNotEmpty) {
-              final topBox = sortedFaces.first.boundingBox;
-              final nx0 = (topBox.left / imgWidth).clamp(0.0, 1.0);
-              final ny0 = (topBox.top / imgHeight).clamp(0.0, 1.0);
-              final nx1 = (topBox.right / imgWidth).clamp(0.0, 1.0);
-              final ny1 = (topBox.bottom / imgHeight).clamp(0.0, 1.0);
-              final iou = _boxOverlap(lastPrimaryFaceTrack, nx0, ny0, nx1, ny1);
-              if (iou >= 0.28) {
-                foregroundFaceContinuous = true;
-              }
-            }
-            cut = !foregroundFaceContinuous;
-          }
-          if (cut) {
-            if (matchedScdTime != null) {
-              timeSec = matchedScdTime;
-            }
-            currentShotIndex++;
-            lastPrimaryFaceTrack = null;
-            if (timeSec - shotStarts.last >= 0.75) {
-              shotStarts.add(timeSec);
-            }
-          }
-        }
-
-        final present = <_SpeakerTrack>[];
-        final frameCands = <_FrameCandidateObs>[];
-        final faceBoxes = <({double x0, double y0, double x1, double y1})>[];
-
         final foregroundCandidates = <Face>[];
         for (final face in sortedFaces) {
           final box = face.boundingBox;
@@ -1322,6 +1350,93 @@ class FaceDetectionService {
           foregroundCandidates.add(face);
           if (foregroundCandidates.length >= 3) break;
         }
+
+        // Consume exactCutTimes monotonically in non-overlapping intervals
+        // (prevTimeSec, rawTimeSec + 0.02] so a single scdet event never fires
+        // on two consecutive frames.
+        double? matchedScdTime;
+        if (i > 0) {
+          while (nextScdIdx < exactCutTimes.length &&
+              exactCutTimes[nextScdIdx] <= prevTimeSec + 0.02) {
+            nextScdIdx++;
+          }
+          if (nextScdIdx < exactCutTimes.length &&
+              exactCutTimes[nextScdIdx] <= rawTimeSec + 0.02) {
+            matchedScdTime = exactCutTimes[nextScdIdx];
+            nextScdIdx++;
+            while (nextScdIdx < exactCutTimes.length &&
+                exactCutTimes[nextScdIdx] <= rawTimeSec + 0.02) {
+              nextScdIdx++;
+            }
+          }
+        }
+
+        var cut = false;
+        if (grid != null && i > 0) {
+          final gridSceneCut = isSceneChange(
+            prevGridBytes,
+            grid,
+            silhouetteGridWidth,
+            silhouetteGridHeight,
+          );
+          final rawCut = matchedScdTime != null || gridSceneCut;
+          if (rawCut) {
+            var foregroundFaceContinuous = false;
+            if (prevVisibleTracks.isNotEmpty &&
+                foregroundCandidates.isNotEmpty &&
+                foregroundCandidates.length == prevVisibleTracks.length) {
+              var matchedFaces = 0;
+              var iouSum = 0.0;
+              final usedPrev = <int>{};
+              for (final fCand in foregroundCandidates) {
+                final b = fCand.boundingBox;
+                final nx0 = (b.left / imgWidth).clamp(0.0, 1.0);
+                final ny0 = (b.top / imgHeight).clamp(0.0, 1.0);
+                final nx1 = (b.right / imgWidth).clamp(0.0, 1.0);
+                final ny1 = (b.bottom / imgHeight).clamp(0.0, 1.0);
+                var bestIou = 0.0;
+                var bestTrackId = -1;
+                for (final pt in prevVisibleTracks) {
+                  if (usedPrev.contains(pt.id)) continue;
+                  final iou = _boxOverlap(pt, nx0, ny0, nx1, ny1);
+                  if (iou > bestIou) {
+                    bestIou = iou;
+                    bestTrackId = pt.id;
+                  }
+                }
+                if (bestTrackId >= 0 && bestIou >= 0.32) {
+                  usedPrev.add(bestTrackId);
+                  matchedFaces++;
+                  iouSum += bestIou;
+                }
+              }
+              final meanIou = matchedFaces > 0 ? iouSum / matchedFaces : 0.0;
+              if (matchedFaces == foregroundCandidates.length &&
+                  (!gridSceneCut || meanIou >= 0.44)) {
+                foregroundFaceContinuous = true;
+              }
+            }
+            cut = !foregroundFaceContinuous;
+          }
+          if (cut) {
+            if (matchedScdTime != null) {
+              timeSec = matchedScdTime.clamp(
+                lastEmittedTimeSec + 0.02,
+                rawTimeSec + 0.02,
+              );
+            }
+            currentShotIndex++;
+            prevVisibleTracks = const [];
+            if (timeSec - shotStarts.last >= 0.65) {
+              shotStarts.add(timeSec);
+            }
+          }
+        }
+        lastEmittedTimeSec = timeSec;
+
+        final present = <_SpeakerTrack>[];
+        final frameCands = <_FrameCandidateObs>[];
+        final faceBoxes = <({double x0, double y0, double x1, double y1})>[];
 
         for (final face in foregroundCandidates) {
           final box = face.boundingBox;
@@ -1342,11 +1457,13 @@ class FaceDetectionService {
               ? (area / maxFaceArea).clamp(0.0, 1.0)
               : 1.0;
 
+          // Exclude the entire vertical head+shoulders+torso column of every
+          // visible person so dark suits/jackets never spawn false silhouettes.
           faceBoxes.add((
-            x0: (fcx - fw * 1.45).clamp(0.0, 1.0),
-            y0: (ny0 - fh * 0.45).clamp(0.0, 1.0),
-            x1: (fcx + fw * 1.45).clamp(0.0, 1.0),
-            y1: (ny1 + fh * 3.20).clamp(0.0, 1.0),
+            x0: (fcx - max(fw * 1.85, 0.14)).clamp(0.0, 1.0),
+            y0: 0.0,
+            x1: (fcx + max(fw * 1.85, 0.14)).clamp(0.0, 1.0),
+            y1: 1.0,
           ));
 
           final torsoNx0 = (cx - fw * 1.05).clamp(0.0, 1.0);
@@ -1421,7 +1538,6 @@ class FaceDetectionService {
               ..foregroundRatio = fgRatio;
             tracks[created.id] = created;
             present.add(created);
-            lastPrimaryFaceTrack ??= created;
             created.lastMoveDelta = 0;
             _updateLipActivity(
               created,
@@ -1540,7 +1656,6 @@ class FaceDetectionService {
             ),
           );
           present.add(track);
-          lastPrimaryFaceTrack = track;
           frameCands.add(
             _FrameCandidateObs(
               track: track,
@@ -1623,16 +1738,45 @@ class FaceDetectionService {
           }
         }
 
-        final visibleFacesCount = present.length;
+        final visibleFaces =
+            present.where((t) => !t.isSilhouette).toList(growable: false);
+        prevVisibleTracks = visibleFaces;
+        final visibleFacesCount = visibleFaces.length;
+
+        // Only search for an anonymized pitch-black silhouette when there is a
+        // genuinely unoccupied horizontal panel (>= 28% of frame width) away
+        // from all visible speakers. A centered solo speaker (normX in
+        // 0.36..0.64) never runs silhouette detection on their own background.
+        var hasUnoccupiedPanelForSilhouette = visibleFacesCount == 0;
+        if (visibleFacesCount == 1) {
+          final vx = visibleFaces.first.normX;
+          hasUnoccupiedPanelForSilhouette = vx < 0.36 || vx > 0.64;
+        } else if (visibleFacesCount == 2) {
+          final sortedX = [visibleFaces[0].normX, visibleFaces[1].normX]..sort();
+          final leftGap = sortedX[0];
+          final midGap = sortedX[1] - sortedX[0];
+          final rightGap = 1.0 - sortedX[1];
+          hasUnoccupiedPanelForSilhouette =
+              leftGap >= 0.30 || midGap >= 0.36 || rightGap >= 0.30;
+        }
+
         SilhouetteSubject? subject;
-        if (grid != null && visibleFacesCount <= 2 && maxFaceArea < 0.055) {
-          subject = detectSilhouetteOrMotionSubject(
+        if (grid != null &&
+            hasUnoccupiedPanelForSilhouette &&
+            maxFaceArea < 0.055) {
+          final candidateSubject = detectSilhouetteOrMotionSubject(
             grid,
             silhouetteGridWidth,
             silhouetteGridHeight,
             prevGridBytes,
             excludeRects: faceBoxes,
           );
+          if (candidateSubject != null &&
+              visibleFaces.every(
+                (vf) => (vf.normX - candidateSubject.normX).abs() >= 0.22,
+              )) {
+            subject = candidateSubject;
+          }
         }
         if (subject != null) {
           silhouetteHits++;
@@ -2001,20 +2145,20 @@ class FaceDetectionService {
       }
 
       if (topVis != null &&
-          bestVal >= 0.0125 &&
-          topVis.avSyncScore >= 0.40 &&
-          (visCands.length == 1 || bestVal >= secondVal * 1.40 + 0.003)) {
+          bestVal >= 0.0110 &&
+          topVis.avSyncScore >= 0.38 &&
+          (visCands.length == 1 || bestVal >= secondVal * 1.35 + 0.0025)) {
         final gId = trackToGroup[topVis.track.id];
         if (gId != null) {
           final map = groupAffinities[gId]!;
-          map[cId] = min(14.0, (map[cId] ?? 0.0) + 0.85);
+          map[cId] = min(14.0, (map[cId] ?? 0.0) + 0.90);
           for (final other in visCands) {
             if (!identical(other.track, topVis.track)) {
               final oG = trackToGroup[other.track.id];
               if (oG != null && oG != gId) {
                 final oMap = groupAffinities[oG]!;
                 final prev = oMap[cId] ?? 0.0;
-                if (prev > 0) oMap[cId] = max(0.0, prev - 0.20);
+                if (prev > 0) oMap[cId] = max(0.0, prev - 0.22);
               }
             }
           }
@@ -2022,9 +2166,9 @@ class FaceDetectionService {
       } else if (hasSil &&
           visCands.isNotEmpty &&
           visCands.every(
-            (v) => v.rawVisualDelta < 0.0090 && v.effectiveLipDelta < 0.0095,
+            (v) => v.rawVisualDelta < 0.0105 && v.effectiveLipDelta < 0.0110,
           )) {
-        silVoicePool[cId] = min(14.0, (silVoicePool[cId] ?? 0.0) + 0.55);
+        silVoicePool[cId] = min(14.0, (silVoicePool[cId] ?? 0.0) + 0.70);
       }
     }
 
@@ -2160,11 +2304,26 @@ class FaceDetectionService {
       // Lock 100% of the shot onto that person from frame 0 of the shot.
       if (shotTracks.length == 1) {
         final sole = shotTracks.first;
+        final soleXs = <double>[];
+        final soleYs = <double>[];
+        for (var k = 0; k < shotObs.length; k++) {
+          final pos = coordsForTrackInShot(sole, shotObs, k);
+          soleXs.add(pos.x);
+          soleYs.add(pos.y);
+        }
+        soleXs.sort();
+        soleYs.sort();
+        final medX = soleXs[soleXs.length ~/ 2];
+        final medY = soleYs[soleYs.length ~/ 2];
+        final maxSpanX = soleXs.last - soleXs.first;
+        final maxSpanY = soleYs.last - soleYs.first;
+        final isSeatedSolo = maxSpanX <= 0.11 && maxSpanY <= 0.10;
+
         for (var k = 0; k < shotObs.length; k++) {
           final obs = shotObs[k];
           final pos = coordsForTrackInShot(sole, shotObs, k);
-          lastX = pos.x;
-          lastY = pos.y;
+          lastX = isSeatedSolo ? medX : pos.x;
+          lastY = isSeatedSolo ? medY : pos.y;
           lastW = pos.w;
           lastH = pos.h;
           lastSeenSec = obs.timeSec;
@@ -2206,6 +2365,47 @@ class FaceDetectionService {
         }
       }
 
+      // Compute each visible track's 75th-percentile speaking lip delta in
+      // this shot so we have both an absolute and speaker-relative silence
+      // threshold for Silhouette Elimination.
+      final trackP75Eff = <_SpeakerTrack, double>{};
+      for (final t in shotTracks) {
+        if (t.isSilhouette) continue;
+        final vals = <double>[];
+        for (var k = 0; k < nFrames; k++) {
+          if (!voicedFlags[k]) continue;
+          for (final c in shotObs[k].candidates) {
+            if (identical(c.track, t)) {
+              vals.add(c.effectiveLipDelta);
+              break;
+            }
+          }
+        }
+        if (vals.isNotEmpty) {
+          vals.sort();
+          trackP75Eff[t] = vals[(vals.length * 0.75).floor()];
+        } else {
+          trackP75Eff[t] = 0.0;
+        }
+      }
+
+      double localMeanEffDelta(_SpeakerTrack track, int centerK) {
+        final w0 = max(0, centerK - 1);
+        final w1 = min(nFrames - 1, centerK + 1);
+        var sum = 0.0;
+        var count = 0;
+        for (var j = w0; j <= w1; j++) {
+          for (final c in shotObs[j].candidates) {
+            if (identical(c.track, track)) {
+              sum += c.effectiveLipDelta;
+              count++;
+              break;
+            }
+          }
+        }
+        return count > 0 ? sum / count : 0.0;
+      }
+
       final rawEvidence = <_SpeakerTrack, List<double>>{
         for (final t in shotTracks) t: List<double>.filled(nFrames, 0.0),
       };
@@ -2218,6 +2418,7 @@ class FaceDetectionService {
             obs.candidates.where((c) => !c.isSilhouette).toList();
         var maxVisRawDelta = 0.0;
         var maxVisEffDelta = 0.0;
+        var anyVisSpeakingRelatively = false;
         for (final vc in visCands) {
           if (vc.rawVisualDelta > maxVisRawDelta) {
             maxVisRawDelta = vc.rawVisualDelta;
@@ -2225,9 +2426,15 @@ class FaceDetectionService {
           if (vc.effectiveLipDelta > maxVisEffDelta) {
             maxVisEffDelta = vc.effectiveLipDelta;
           }
+          final locMean = localMeanEffDelta(vc.track, k);
+          final p75 = trackP75Eff[vc.track] ?? 0.0;
+          final relThresh = p75 >= 0.018 ? max(0.0100, p75 * 0.40) : 0.0105;
+          if (locMean >= relThresh || vc.rawVisualDelta >= 0.0105) {
+            anyVisSpeakingRelatively = true;
+          }
         }
-        final allVisibleSilentNow =
-            maxVisRawDelta < 0.0108 && maxVisEffDelta < 0.0115;
+        final allVisibleSilentNow = !anyVisSpeakingRelatively ||
+            (maxVisRawDelta < 0.0105 && maxVisEffDelta < 0.0110);
 
         for (final t in shotTracks) {
           _FrameCandidateObs? cand;
@@ -2241,12 +2448,16 @@ class FaceDetectionService {
           if (t.isSilhouette) {
             final silVoiceMatch =
                 t.voiceAffinityForCluster(obs.audio.voiceClusterId);
+            final silMot = cand?.silMotion ?? 0.0;
             if (allVisibleSilentNow) {
-              // Elimination Rule: speech is present while all visible mouths
-              // are still/closed -> the black-masked silhouette is speaking.
-              rawEvidence[t]![k] = 0.62 + silVoiceMatch * 0.45;
-            } else if (silVoiceMatch >= 0.48 && maxVisEffDelta < 0.0140) {
-              rawEvidence[t]![k] = 0.54 + silVoiceMatch * 0.42;
+              // Elimination Rule: human speech is active while all visible
+              // mouths are still/closed -> the black-masked silhouette is the
+              // active speaker!
+              rawEvidence[t]![k] =
+                  0.72 + silVoiceMatch * 0.45 + min(0.18, silMot * 2.5);
+            } else if (silVoiceMatch >= 0.45 && maxVisEffDelta < 0.0135) {
+              rawEvidence[t]![k] =
+                  0.58 + silVoiceMatch * 0.42 + min(0.15, silMot * 2.0);
             } else {
               rawEvidence[t]![k] = 0.01;
             }
@@ -2254,17 +2465,19 @@ class FaceDetectionService {
             final voiceMatch =
                 t.voiceAffinityForCluster(obs.audio.voiceClusterId);
             if (cand != null) {
-              final lipScore = cand.effectiveLipDelta * 24.0 +
-                  (cand.rawVisualDelta >= 0.0120 ? 0.25 : 0.0) +
-                  (cand.rawVisualDelta >= 0.0180 ? 0.18 : 0.0);
-              final gatedVoice = cand.rawVisualDelta >= 0.0080
-                  ? voiceMatch * 0.48
-                  : voiceMatch * 0.16;
+              final locEff = localMeanEffDelta(t, k);
+              final blendedEff = 0.65 * cand.effectiveLipDelta + 0.35 * locEff;
+              final lipScore = blendedEff * 26.0 +
+                  (cand.rawVisualDelta >= 0.0110 ? 0.26 : 0.0) +
+                  (cand.rawVisualDelta >= 0.0170 ? 0.20 : 0.0);
+              final gatedVoice = blendedEff >= 0.0085
+                  ? voiceMatch * 0.46
+                  : voiceMatch * 0.10;
               rawEvidence[t]![k] =
                   lipScore * (0.72 + 0.28 * cand.avSyncScore) + gatedVoice;
             } else {
               // Coasted via voice continuity if momentarily unseen.
-              rawEvidence[t]![k] = voiceMatch * 0.25;
+              rawEvidence[t]![k] = voiceMatch * 0.22;
             }
           }
         }
@@ -2361,7 +2574,8 @@ class FaceDetectionService {
       }
       currentLocked ??= shotTracks.first;
 
-      final assignedWinners = List<_SpeakerTrack>.filled(nFrames, currentLocked);
+      final assignedWinners =
+          List<_SpeakerTrack>.filled(nFrames, currentLocked);
       var framesOnCurrent = 0;
 
       for (var k = 0; k < nFrames; k++) {
@@ -2409,6 +2623,69 @@ class FaceDetectionService {
         assignedWinners[k] = currentLocked!;
       }
 
+      // Compute each track's median X/Y in this shot and apply Split-Screen
+      // Safe Panel Clamping so a 9:16 vertical crop (half-width 0.1582 in a
+      // 16:9 frame) never straddles a 3-way (0.333 / 0.667) or 2-way (0.50)
+      // split-screen border.
+      final shotMedianX = <_SpeakerTrack, double>{};
+      final shotMedianY = <_SpeakerTrack, double>{};
+      for (final t in shotTracks) {
+        final xs = <double>[];
+        final ys = <double>[];
+        for (var k = 0; k < nFrames; k++) {
+          for (final c in shotObs[k].candidates) {
+            if (identical(c.track, t)) {
+              xs.add(c.normX);
+              ys.add(c.normY);
+              break;
+            }
+          }
+        }
+        if (xs.isNotEmpty) {
+          xs.sort();
+          ys.sort();
+          shotMedianX[t] = xs[xs.length ~/ 2];
+          shotMedianY[t] = ys[ys.length ~/ 2];
+        } else {
+          shotMedianX[t] = t.normX;
+          shotMedianY[t] = t.normY;
+        }
+      }
+
+      final sortedByX = List<_SpeakerTrack>.of(shotTracks)
+        ..sort((a, b) => (shotMedianX[a] ?? 0.5).compareTo(shotMedianX[b] ?? 0.5));
+      final isThreeWaySplit = sortedByX.length == 3 &&
+          (shotMedianX[sortedByX[0]] ?? 0.5) < 0.36 &&
+          (shotMedianX[sortedByX[1]] ?? 0.5) >= 0.33 &&
+          (shotMedianX[sortedByX[1]] ?? 0.5) <= 0.67 &&
+          (shotMedianX[sortedByX[2]] ?? 0.5) > 0.64;
+      final isTwoWaySplit = sortedByX.length == 2 &&
+          (shotMedianX[sortedByX[0]] ?? 0.5) < 0.42 &&
+          (shotMedianX[sortedByX[1]] ?? 0.5) > 0.58;
+
+      double clampPanelSafeX(_SpeakerTrack track, double rawX) {
+        final medX = shotMedianX[track] ?? rawX;
+        // If the speaker stays near their seat in this shot, lock onto their
+        // steady median X so the camera does not drift during their turn.
+        final baseX = (rawX - medX).abs() <= 0.06 ? medX : rawX;
+        if (isThreeWaySplit) {
+          if (identical(track, sortedByX[0])) {
+            return baseX.clamp(0.158, 0.175);
+          } else if (identical(track, sortedByX[1])) {
+            return baseX.clamp(0.492, 0.508);
+          } else if (identical(track, sortedByX[2])) {
+            return baseX.clamp(0.825, 0.842);
+          }
+        } else if (isTwoWaySplit) {
+          if (identical(track, sortedByX[0])) {
+            return baseX.clamp(0.158, 0.340);
+          } else if (identical(track, sortedByX[1])) {
+            return baseX.clamp(0.660, 0.842);
+          }
+        }
+        return baseX;
+      }
+
       // Emit activePoints for this multi-person shot with instant cuts on
       // shot entry and on every verified speaker turn switch.
       for (var k = 0; k < nFrames; k++) {
@@ -2416,10 +2693,12 @@ class FaceDetectionService {
         final winner = assignedWinners[k];
         final pos = coordsForTrackInShot(winner, shotObs, k);
         final prevWinner = k > 0 ? assignedWinners[k - 1] : null;
-        final switchedInShot = prevWinner != null && !identical(prevWinner, winner);
+        final switchedInShot =
+            prevWinner != null && !identical(prevWinner, winner);
 
-        lastX = pos.x;
-        lastY = pos.y;
+        final medY = shotMedianY[winner] ?? pos.y;
+        lastX = clampPanelSafeX(winner, pos.x);
+        lastY = (pos.y - medY).abs() <= 0.05 ? medY : pos.y;
         lastW = pos.w;
         lastH = pos.h;
         lastSeenSec = obs.timeSec;
@@ -3185,6 +3464,10 @@ class FaceDetectionService {
     final leftEye = face.landmarks[FaceLandmarkType.leftEye]?.position;
     final rightEye = face.landmarks[FaceLandmarkType.rightEye]?.position;
     final nose = face.landmarks[FaceLandmarkType.noseBase]?.position;
+    final leftMouth = face.landmarks[FaceLandmarkType.leftMouth]?.position;
+    final rightMouth = face.landmarks[FaceLandmarkType.rightMouth]?.position;
+    final bottomMouth = face.landmarks[FaceLandmarkType.bottomMouth]?.position;
+
     if (leftEye != null &&
         rightEye != null &&
         nose != null &&
@@ -3198,20 +3481,66 @@ class FaceDetectionService {
       centerY = (0.35 * eyeCy + 0.65 * noseY).clamp(0.0, 1.0);
     }
 
+    // Anchor the vertical mouth band [0.62 .. 0.78] (center 0.70) directly onto
+    // the detected mouth landmarks when present so the ROI always samples the
+    // lips and never drifts down onto the beard, chin, shirt collar, or mic.
+    if (imgWidth > 0 &&
+        imgHeight > 0 &&
+        (leftMouth != null || rightMouth != null || bottomMouth != null)) {
+      var mSumX = 0.0;
+      var mCountX = 0;
+      if (leftMouth != null) {
+        mSumX += leftMouth.x / imgWidth;
+        mCountX++;
+      }
+      if (rightMouth != null) {
+        mSumX += rightMouth.x / imgWidth;
+        mCountX++;
+      }
+      if (bottomMouth != null && mCountX == 0) {
+        mSumX += bottomMouth.x / imgWidth;
+        mCountX++;
+      }
+      if (mCountX > 0) {
+        final mouthCx = mSumX / mCountX;
+        centerX = (0.55 * centerX + 0.45 * mouthCx).clamp(0.0, 1.0);
+      }
+
+      double? lipCenterY;
+      if (leftMouth != null && rightMouth != null && bottomMouth != null) {
+        final cornersY = (leftMouth.y + rightMouth.y) * 0.5 / imgHeight;
+        final botY = bottomMouth.y / imgHeight;
+        lipCenterY = 0.60 * cornersY + 0.40 * botY;
+      } else if (leftMouth != null && rightMouth != null) {
+        lipCenterY = (leftMouth.y + rightMouth.y) * 0.5 / imgHeight;
+      } else if (bottomMouth != null && nose != null) {
+        final noseY = nose.y / imgHeight;
+        final botY = bottomMouth.y / imgHeight;
+        lipCenterY = 0.32 * noseY + 0.68 * botY;
+      }
+      if (lipCenterY != null) {
+        // Align stabNy0 + 0.70 * stabH == lipCenterY -> centerY = lipCenterY - 0.20 * stabH
+        final landmarkAnchoredCy = lipCenterY - 0.20 * stabH;
+        centerY = (0.35 * centerY + 0.65 * landmarkAnchoredCy).clamp(0.0, 1.0);
+      }
+    }
+
     final stabNx0 = (centerX - stabW * 0.5).clamp(0.0, 1.0);
     final stabNy0 = (centerY - stabH * 0.5).clamp(0.0, 1.0);
     final stabNx1 = (centerX + stabW * 0.5).clamp(0.0, 1.0);
     final stabNy1 = (centerY + stabH * 0.5).clamp(0.0, 1.0);
 
-    final resScale = (fh / 0.14).clamp(0.35, 1.0);
+    final resScale = (fh / 0.14).clamp(0.45, 1.0);
 
     final contourOpen = _extractInnerLipContourMar(contourFace ?? face);
     var contourDelta = 0.0;
     if (contourOpen != null) {
       final prevContourOpen = track.lastContourInnerOpen;
       if (hasPrev && prevContourOpen != null) {
-        final dContour = max(0.0, (contourOpen - prevContourOpen).abs() - 0.006);
-        contourDelta = dContour * 3.4 * resScale;
+        // Static-image ML Kit contour predictions have ~0.018 natural jitter on
+        // closed mouths; use a 0.020 deadband and verify with pixelDelta below.
+        final dContour = max(0.0, (contourOpen - prevContourOpen).abs() - 0.020);
+        contourDelta = dContour * 2.8 * resScale;
       }
       track.lastContourInnerOpen = contourOpen;
     }
@@ -3223,16 +3552,16 @@ class FaceDetectionService {
     if (open != null) {
       final previous = track.lastOpen;
       if (hasPrev && previous != null) {
-        final dOpen = max(0.0, (open - previous).abs() - 0.0085);
-        geomDelta += dOpen * 2.3 * resScale;
+        final dOpen = max(0.0, (open - previous).abs() - 0.022);
+        geomDelta += dOpen * 1.9 * resScale;
       }
       track.lastOpen = open;
     }
     if (width != null) {
       final previous = track.lastWidth;
       if (hasPrev && previous != null) {
-        final dWidth = max(0.0, (width - previous).abs() - 0.009);
-        geomDelta += dWidth * 1.3 * resScale;
+        final dWidth = max(0.0, (width - previous).abs() - 0.024);
+        geomDelta += dWidth * 1.1 * resScale;
       }
       track.lastWidth = width;
     }
@@ -3240,8 +3569,10 @@ class FaceDetectionService {
     final headYawDeg = face.headEulerAngleY ?? 0.0;
     var pixelDelta = 0.0;
     var oralOpen = open ?? 0.0;
+    final hasPixelGrids =
+        currGrid != null && currGrid.length >= gridW * gridH * 4;
 
-    if (currGrid != null && currGrid.length >= gridW * gridH * 4) {
+    if (hasPixelGrids) {
       final currContrast = _mouthToCheekContrast(
         currGrid,
         gridW,
@@ -3287,10 +3618,10 @@ class FaceDetectionService {
           prevNy1: prevNy1,
         );
         final contrastDelta = prevContrast != null
-            ? max(0.0, (currContrast - prevContrast).abs() - 0.0085)
+            ? max(0.0, (currContrast - prevContrast).abs() - 0.010)
             : 0.0;
         final oralDelta = prevOralCavity != null
-            ? max(0.0, (currOralCavity - prevOralCavity).abs() - 0.007)
+            ? max(0.0, (currOralCavity - prevOralCavity).abs() - 0.0085)
             : 0.0;
         pixelDelta =
             (regionDelta * 3.8 + contrastDelta * 1.8 + oralDelta * 2.6) *
@@ -3304,9 +3635,23 @@ class FaceDetectionService {
       ..stabNx1 = stabNx1
       ..stabNy1 = stabNy1;
 
-    final rawVisualDelta = contourOpen != null
-        ? (contourDelta * 0.60 + geomDelta * 0.15 + pixelDelta * 0.55)
-        : (geomDelta + pixelDelta);
+    // Gate static-JPEG landmark/contour jitter by actual lip pixel change when
+    // pixel grids are available: if the lip pixels did not move (pixelDelta <
+    // 0.003), landmark noise on a silent face cannot inflate rawVisualDelta.
+    final double rawVisualDelta;
+    if (hasPixelGrids && hasPrev && prevGrid != null) {
+      if (pixelDelta < 0.0030) {
+        rawVisualDelta = pixelDelta + min(0.0020, (contourDelta + geomDelta) * 0.20);
+      } else {
+        rawVisualDelta = contourOpen != null
+            ? (contourDelta * 0.45 + geomDelta * 0.15 + pixelDelta * 0.75)
+            : (geomDelta * 0.35 + pixelDelta * 0.90);
+      }
+    } else {
+      rawVisualDelta = contourOpen != null
+          ? (contourDelta * 0.60 + geomDelta * 0.15 + pixelDelta * 0.55)
+          : (geomDelta + pixelDelta);
+    }
 
     track.recordSpeechSample(
       rawVisualDelta,
@@ -3368,7 +3713,7 @@ class FaceDetectionService {
     final mx0 = (nx0 + fw * (0.32 + yawShift)).clamp(0.0, 1.0);
     final mx1 = (nx0 + fw * (0.68 + yawShift)).clamp(mx0 + 0.01, 1.0);
     final my0 = (ny0 + fh * 0.62).clamp(0.0, 1.0);
-    final my1 = (ny0 + fh * 0.84).clamp(my0 + 0.01, 1.0);
+    final my1 = (ny0 + fh * 0.78).clamp(my0 + 0.01, 1.0);
 
     const rows = 7;
     const cols = 5;
@@ -3383,12 +3728,14 @@ class FaceDetectionService {
       rowLumas[r] = sum / cols;
     }
 
-    final outerRef = (rowLumas.first + rowLumas.last) * 0.5;
+    final outerRef = max(38.0, (rowLumas.first + rowLumas.last) * 0.5);
     var minInner = rowLumas[2];
     for (var r = 2; r <= 4; r++) {
       if (rowLumas[r] < minInner) minInner = rowLumas[r];
     }
-    return (max(0.0, outerRef - minInner) / 255.0).clamp(0.0, 0.5);
+    // Normalize by local lip/skin brightness so dark skin or dim lighting has
+    // full sensitivity to oral cavity opening.
+    return (max(0.0, outerRef - minInner) / (outerRef * 2.1)).clamp(0.0, 0.5);
   }
 
   static double _mouthToCheekContrast(
@@ -3424,11 +3771,14 @@ class FaceDetectionService {
           gridW,
           gridH,
           (nx0 + fw * (0.34 + 0.32 * u + yawShift)).clamp(0.0, 1.0),
-          ny0 + fh * (0.64 + 0.18 * v),
+          ny0 + fh * (0.63 + 0.15 * v),
         );
       }
     }
-    return ((cheekSum - mouthSum) / (n * n)) / 255.0;
+    final cheekMean = cheekSum / (n * n);
+    final mouthMean = mouthSum / (n * n);
+    final normDenom = max(48.0, cheekMean * 1.85);
+    return ((cheekMean - mouthMean) / normDenom).clamp(-0.5, 0.5);
   }
 
   static double _sampleLumaBilinear(
@@ -3486,15 +3836,17 @@ class FaceDetectionService {
     final pfh = prevNy1 - prevNy0;
     if (fw <= 0 || fh <= 0 || pfw <= 0 || pfh <= 0) return 0;
 
-    final cx0 = nx0 + fw * 0.25;
-    final cx1 = nx0 + fw * 0.75;
-    final cy0 = ny0 + fh * 0.58;
-    final cy1 = ny0 + fh * 0.88;
+    // Tight lip-only vertical band [0.62 .. 0.78] (excludes beard/chin/collar/mic
+    // at 0.78..0.96).
+    final cx0 = nx0 + fw * 0.26;
+    final cx1 = nx0 + fw * 0.74;
+    final cy0 = ny0 + fh * 0.62;
+    final cy1 = ny0 + fh * 0.78;
 
-    final px0 = prevNx0 + pfw * 0.25;
-    final px1 = prevNx0 + pfw * 0.75;
-    final py0 = prevNy0 + pfh * 0.58;
-    final py1 = prevNy0 + pfh * 0.88;
+    final px0 = prevNx0 + pfw * 0.26;
+    final px1 = prevNx0 + pfw * 0.74;
+    final py0 = prevNy0 + pfh * 0.62;
+    final py1 = prevNy0 + pfh * 0.78;
 
     const cols = 6;
     const rows = 4;
@@ -3533,21 +3885,45 @@ class FaceDetectionService {
     final ucy1 = ny0 + fh * 0.44;
     final upy0 = prevNy0 + pfh * 0.16;
     final upy1 = prevNy0 + pfh * 0.44;
-    var upperSum = 0.0;
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        final tx = cx0 + (cx1 - cx0) * (c + 0.5) / cols;
-        final ty = ucy0 + (ucy1 - ucy0) * (r + 0.5) / rows;
-        final px = px0 + (px1 - px0) * (c + 0.5) / cols;
-        final py = upy0 + (upy1 - upy0) * (r + 0.5) / rows;
-        final currLuma = _sampleLumaBilinear(currGrid, gridW, gridH, tx, ty);
-        final prevLuma = _sampleLumaBilinear(prevGrid, gridW, gridH, px, py);
-        upperSum += (currLuma - prevLuma).abs();
+    var minUpperDiff = double.infinity;
+    var faceLumaSum = 0.0;
+    for (final sdy in shifts) {
+      for (final sdx in shifts) {
+        var upperSum = 0.0;
+        final offX = sdx * fw;
+        final offY = sdy * fh;
+        for (var r = 0; r < rows; r++) {
+          for (var c = 0; c < cols; c++) {
+            final tx = (cx0 + (cx1 - cx0) * (c + 0.5) / cols + offX)
+                .clamp(0.0, 1.0);
+            final ty = (ucy0 + (ucy1 - ucy0) * (r + 0.5) / rows + offY)
+                .clamp(0.0, 1.0);
+            final px = px0 + (px1 - px0) * (c + 0.5) / cols;
+            final py = upy0 + (upy1 - upy0) * (r + 0.5) / rows;
+            final currLuma =
+                _sampleLumaBilinear(currGrid, gridW, gridH, tx, ty);
+            final prevLuma =
+                _sampleLumaBilinear(prevGrid, gridW, gridH, px, py);
+            upperSum += (currLuma - prevLuma).abs();
+            if (sdx == 0.0 && sdy == 0.0) {
+              faceLumaSum += (currLuma + prevLuma) * 0.5;
+            }
+          }
+        }
+        final uDiff = (upperSum / n) / 255.0;
+        if (uDiff < minUpperDiff) {
+          minUpperDiff = uDiff;
+        }
       }
     }
-    final upperDiff = (upperSum / n) / 255.0;
-    final netDiff = max(0.0, minMouthDiff - 0.85 * upperDiff);
-    return max(0.0, netDiff - 0.0065);
+
+    final faceMeanLuma = (faceLumaSum / n) / 255.0;
+    // Normalize by local face brightness so dark-skinned or dimly lit speakers
+    // produce full-strength lip deltas.
+    final lumaGain = (0.40 / max(0.12, faceMeanLuma)).clamp(0.80, 2.50);
+    final netDiff =
+        max(0.0, (minMouthDiff - 1.05 * minUpperDiff) * lumaGain);
+    return max(0.0, netDiff - 0.0068);
   }
 
   static (double?, double?) _lipMetrics(Face face, ui.Rect box) {
@@ -3971,6 +4347,7 @@ class FaceDetectionService {
         continue;
       }
 
+      final isLastShot = sIdx == shots.length - 1;
       List<FaceTrackPoint> shotRaw;
       if (effectiveMode == ShotLockMode.specificPerson &&
           targetSpeakerId != null) {
@@ -3985,7 +4362,9 @@ class FaceDetectionService {
         shotRaw = track.rawPoints
             .where((p) =>
                 p.timeSec >= shot.startSec - 1e-3 &&
-                p.timeSec <= shot.endSec + 1e-3)
+                (isLastShot
+                    ? p.timeSec <= shot.endSec + 1e-3
+                    : p.timeSec < shot.endSec - 1e-3))
             .toList();
       }
 
@@ -4010,7 +4389,7 @@ class FaceDetectionService {
         final kf = shotKfs[kIdx];
         final isShotStartCut = sIdx > 0 && kIdx == 0;
         if (combinedKeyframes.isNotEmpty &&
-            (kf.timeSec - combinedKeyframes.last.timeSec).abs() < 0.05) {
+            (kf.timeSec - combinedKeyframes.last.timeSec).abs() <= 0.002) {
           combinedKeyframes[combinedKeyframes.length - 1] =
               kf.copyWith(isCut: kf.isCut || isShotStartCut);
         } else {

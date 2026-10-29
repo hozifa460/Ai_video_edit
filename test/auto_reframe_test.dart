@@ -1668,6 +1668,130 @@ void main() {
       expect(overridden, isNotEmpty);
       expect(overridden.first.normX, closeTo(0.78, 0.05));
     });
+
+    test('computeMouthRegionDelta normalizes dark-skin/dim-light lip motion and ignores beard/collar below 0.78', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final prevDark = Uint8List(w * h * 4);
+      final currDarkLip = Uint8List(w * h * 4);
+      final currBeardCollar = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        // Dark skin / dim lighting baseline (luma = 42)
+        prevDark[i * 4] = 42;
+        prevDark[i * 4 + 1] = 42;
+        prevDark[i * 4 + 2] = 42;
+        prevDark[i * 4 + 3] = 255;
+
+        currDarkLip[i * 4] = 42;
+        currDarkLip[i * 4 + 1] = 42;
+        currDarkLip[i * 4 + 2] = 42;
+        currDarkLip[i * 4 + 3] = 255;
+
+        currBeardCollar[i * 4] = 42;
+        currBeardCollar[i * 4 + 1] = 42;
+        currBeardCollar[i * 4 + 2] = 42;
+        currBeardCollar[i * 4 + 3] = 255;
+      }
+
+      // Face box [0.3, 0.2] .. [0.7, 0.8] (fh = 0.6).
+      // Lip band [0.62 .. 0.78] corresponds to y = 0.572 .. 0.668 -> gy = 26..30.
+      for (var by = 26; by <= 30; by++) {
+        for (var bx = 30; bx <= 50; bx++) {
+          final o = (by * w + bx) * 4;
+          currDarkLip[o] = 52; // +10 gray levels on dark skin
+          currDarkLip[o + 1] = 52;
+          currDarkLip[o + 2] = 52;
+        }
+      }
+
+      // Beard / shirt collar / microphone region [0.82 .. 0.96] corresponds to
+      // y = 0.692 .. 0.776 -> gy = 32..35.
+      for (var by = 32; by <= 35; by++) {
+        for (var bx = 30; bx <= 50; bx++) {
+          final o = (by * w + bx) * 4;
+          currBeardCollar[o] = 90; // huge +48 collar/mic flash below the lips
+          currBeardCollar[o + 1] = 90;
+          currBeardCollar[o + 2] = 90;
+        }
+      }
+
+      final darkLipDelta = FaceDetectionService.computeMouthRegionDelta(
+        prevDark,
+        currDarkLip,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+      final beardCollarDelta = FaceDetectionService.computeMouthRegionDelta(
+        prevDark,
+        currBeardCollar,
+        w,
+        h,
+        nx0: 0.3,
+        ny0: 0.2,
+        nx1: 0.7,
+        ny1: 0.8,
+        prevNx0: 0.3,
+        prevNy0: 0.2,
+        prevNx1: 0.7,
+        prevNy1: 0.8,
+      );
+
+      expect(darkLipDelta, greaterThan(0.03));
+      expect(beardCollarDelta, equals(0.0));
+    });
+
+    test('buildKeyframesWithShotOverrides preserves hard cuts at shot boundaries without overwriting previous shot tail', () {
+      final raw = <FaceTrackPoint>[
+        for (var i = 0; i < 10; i++)
+          FaceTrackPoint(
+            timeSec: i * 0.2,
+            normX: 0.22,
+            normY: 0.45,
+            speakerId: 0,
+            isCut: i == 0,
+          ),
+        for (var i = 10; i < 20; i++)
+          FaceTrackPoint(
+            timeSec: i * 0.2,
+            normX: 0.78,
+            normY: 0.45,
+            speakerId: 1,
+            isCut: i == 10,
+          ),
+      ];
+      final track = FaceTrackResult(
+        rawPoints: raw,
+        keyframes: FaceDetectionService.buildKeyframes(raw),
+        avgNormX: 0.50,
+        avgNormY: 0.45,
+        facesDetectedCount: 20,
+        shots: const [
+          SceneShot(id: 0, startSec: 0.0, endSec: 2.0),
+          SceneShot(id: 1, startSec: 2.0, endSec: 4.0),
+        ],
+      );
+
+      final kfs = FaceDetectionService.buildKeyframesWithShotOverrides(
+        track: track,
+        shots: track.shots,
+        shotOverrides: const {},
+      );
+
+      expect(kfs.length, 2);
+      expect(kfs[0].timeSec, closeTo(0.0, 1e-6));
+      expect(kfs[0].normX, closeTo(0.22, 1e-6));
+      expect(kfs[1].timeSec, closeTo(2.0, 1e-6));
+      expect(kfs[1].normX, closeTo(0.78, 1e-6));
+      expect(kfs[1].isCut, isTrue);
+    });
   });
 }
 
