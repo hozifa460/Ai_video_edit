@@ -1590,19 +1590,23 @@ void main() {
     test('computeAudioVisualSyncScore rewards synchronized lip-voice modulation and rejects silent nodding', () {
       const audioMod = [0.65, 0.72, 0.68, 0.75];
       const syncedMouth = [0.025, 0.032, 0.028, 0.035];
+      const lipOpen = [0.04, 0.09, 0.05, 0.10];
       const silentMouth = [0.001, 0.001, 0.001, 0.001];
+      const silentOpen = [0.02, 0.02, 0.02, 0.02];
 
       final syncScore = FaceDetectionService.computeAudioVisualSyncScore(
-        mouthHistory: syncedMouth,
-        audioModHistory: audioMod,
+        syncedMouth,
+        lipOpen,
+        audioMod,
       );
       final silentScore = FaceDetectionService.computeAudioVisualSyncScore(
-        mouthHistory: silentMouth,
-        audioModHistory: audioMod,
+        silentMouth,
+        silentOpen,
+        audioMod,
       );
 
       expect(syncScore, greaterThan(0.55));
-      expect(silentScore, equals(0.0));
+      expect(silentScore, lessThan(0.35));
     });
 
     test('buildKeyframesWithShotOverrides locks a specific shot onto a chosen speaker', () {
@@ -1612,18 +1616,53 @@ void main() {
             timeSec: i * 0.25,
             normX: 0.25,
             normY: 0.45,
-            shotId: 0,
+            speakerId: 0,
             isCut: i == 0,
-            persons: const [
-              DetectedPersonCandidate(personId: 1, normX: 0.25, normY: 0.45),
-              DetectedPersonCandidate(personId: 2, normX: 0.78, normY: 0.48),
-            ],
           ),
       ];
+      final person2Points = <FaceTrackPoint>[
+        for (var i = 0; i < 6; i++)
+          FaceTrackPoint(
+            timeSec: i * 0.25,
+            normX: 0.78,
+            normY: 0.48,
+            speakerId: 1,
+          ),
+      ];
+      final track = FaceTrackResult(
+        rawPoints: raw,
+        keyframes: FaceDetectionService.buildKeyframes(raw),
+        avgNormX: 0.25,
+        avgNormY: 0.45,
+        facesDetectedCount: 12,
+        speakers: [
+          DetectedSpeakerProfile(
+            id: 0,
+            label: 'Person 1 - Left (يسار)',
+            avgNormX: 0.25,
+            avgNormY: 0.45,
+            rawPoints: raw,
+          ),
+          DetectedSpeakerProfile(
+            id: 1,
+            label: 'Person 2 - Right (يمين)',
+            avgNormX: 0.78,
+            avgNormY: 0.48,
+            rawPoints: person2Points,
+          ),
+        ],
+        shots: const [SceneShot(id: 0, startSec: 0.0, endSec: 1.5)],
+      );
 
       final overridden = FaceDetectionService.buildKeyframesWithShotOverrides(
-        raw,
-        shotTargetOverrides: const {0: 2},
+        track: track,
+        shots: track.shots,
+        shotOverrides: const {
+          0: ShotTrackingOverride(
+            mode: ShotLockMode.specificPerson,
+            speakerId: 1,
+          ),
+        },
       );
 
       expect(overridden, isNotEmpty);
