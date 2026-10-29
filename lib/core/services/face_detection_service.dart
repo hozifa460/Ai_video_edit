@@ -587,43 +587,37 @@ class FaceDetectionService {
               prevNy1: by1,
             );
           }
-          final prominent = subject.normW * subject.normH >= 0.08;
           var activity = max(gestureDelta, maskEdge * 3.2);
-          if (faces.isEmpty) {
-            if (prominent) activity = max(activity, 0.045);
-          } else {
-            var maxVisibleFaceActivity = 0.0;
-            for (final t in tracks.values) {
-              if (!t.isSilhouette && t.lastSeenSec == timeSec) {
-                if (t.recentActivity > maxVisibleFaceActivity) {
-                  maxVisibleFaceActivity = t.recentActivity;
-                }
+          var maxVisibleFaceActivity = 0.0;
+          var hasVisibleFaces = false;
+          for (final t in tracks.values) {
+            if (!t.isSilhouette && t.lastSeenSec == timeSec) {
+              hasVisibleFaces = true;
+              if (t.recentActivity > maxVisibleFaceActivity) {
+                maxVisibleFaceActivity = t.recentActivity;
               }
-            }
-            if (maxVisibleFaceActivity < 0.018) {
-              // Visible faces are silent -> the masked speaker is the one talking
-              activity = max(activity, 0.055);
-            } else {
-              // A visible face is actively moving its lips -> yield to visible speaker
-              activity = min(activity, 0.005);
             }
           }
-          if (prevGridBytes != null && !cut && grid != null) {
-            subjectTrack.silhouetteActivity =
-                subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
-          } else {
-            var maxVisibleFaceActivity = 0.0;
-            for (final t in tracks.values) {
-              if (!t.isSilhouette && t.lastSeenSec == timeSec) {
-                if (t.recentActivity > maxVisibleFaceActivity) {
-                  maxVisibleFaceActivity = t.recentActivity;
-                }
-              }
+          if (!hasVisibleFaces) {
+            activity = max(activity, 0.045);
+            if (prevGridBytes != null && !cut && grid != null) {
+              subjectTrack.silhouetteActivity =
+                  subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
+            } else {
+              subjectTrack.silhouetteActivity = activity;
             }
-            subjectTrack.silhouetteActivity =
-                (faces.isEmpty || maxVisibleFaceActivity < 0.018)
-                    ? 0.055
-                    : 0.008;
+          } else if (maxVisibleFaceActivity < 0.018) {
+            // Visible faces are silent -> the masked speaker is talking
+            activity = max(activity, 0.055);
+            if (prevGridBytes != null && !cut && grid != null) {
+              subjectTrack.silhouetteActivity =
+                  subjectTrack.silhouetteActivity * 0.35 + activity * 0.65;
+            } else {
+              subjectTrack.silhouetteActivity = activity;
+            }
+          } else {
+            // A visible face is actively moving its lips -> yield immediately (0ms delay)
+            subjectTrack.silhouetteActivity = 0.004;
           }
 
           _updateTrack(
@@ -919,10 +913,10 @@ class FaceDetectionService {
     }
 
     // Search region for the seated silhouette.
-    final x0 = (silhouetteRegionX0 * width).ceil();
-    final x1 = (silhouetteRegionX1 * width).floor();
-    final y0 = (silhouetteRegionY0 * height).ceil();
-    final y1 = (silhouetteRegionY1 * height).floor();
+    final x0 = (silhouetteRegionX0 * width).ceil().clamp(0, width - 1);
+    final x1 = (silhouetteRegionX1 * width).floor().clamp(0, width - 1);
+    final y0 = (silhouetteRegionY0 * height).ceil().clamp(0, height - 1);
+    final y1 = (silhouetteRegionY1 * height).floor().clamp(0, height - 1);
     if (x1 - x0 < 3 || y1 - y0 < 3) return null;
     if (meanLuma < silhouetteMinBackgroundLuma) {
       // Dark scene: no bright studio background to mask against.

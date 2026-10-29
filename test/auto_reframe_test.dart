@@ -940,6 +940,58 @@ void main() {
       expect(subject!.normX, greaterThan(0.85));
     });
 
+    test('detectSilhouetteOrMotionSubject does not RangeError or wrap on '
+        'full-width (x0=0, x1=79) grids', () {
+      const w = FaceDetectionService.silhouetteGridWidth;
+      const h = FaceDetectionService.silhouetteGridHeight;
+      final rgba = Uint8List(w * h * 4);
+      for (var i = 0; i < w * h; i++) {
+        rgba[i * 4] = 140;
+        rgba[i * 4 + 1] = 140;
+        rgba[i * 4 + 2] = 140;
+        rgba[i * 4 + 3] = 255;
+      }
+      // Ceiling (gy=0..3, gx=76..79), right border (gy=0..41, gx=72..79),
+      // left border (gy=0..41, gx=0..4).
+      for (var gy = 0; gy <= 3; gy++) {
+        for (var gx = 76; gx <= 79; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 5;
+          rgba[o + 1] = 5;
+          rgba[o + 2] = 5;
+        }
+      }
+      for (var gy = 0; gy <= 41; gy++) {
+        for (var gx = 72; gx <= 79; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 5;
+          rgba[o + 1] = 5;
+          rgba[o + 2] = 5;
+        }
+      }
+      for (var gy = 0; gy <= 41; gy++) {
+        for (var gx = 0; gx <= 4; gx++) {
+          final o = (gy * w + gx) * 4;
+          rgba[o] = 5;
+          rgba[o + 1] = 5;
+          rgba[o + 2] = 5;
+        }
+      }
+
+      SilhouetteSubject? subject;
+      expect(() {
+        subject = FaceDetectionService.detectSilhouetteOrMotionSubject(
+          rgba,
+          w,
+          h,
+          null,
+        );
+      }, returnsNormally);
+      // No wrap-around: detected cluster must not span the whole width.
+      expect(subject, isNotNull);
+      expect(subject!.normW, lessThan(0.5));
+    });
+
     test('ceiling-connected wall pillar is stripped and normX stays on the '
         'silhouette head', () {
       const w = FaceDetectionService.silhouetteGridWidth;

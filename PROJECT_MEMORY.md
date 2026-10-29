@@ -580,6 +580,16 @@ Android يستخدم Java/Kotlin target 17، SDK versions موروثة من Flut
 - Limitations: host-side only - no device run, no real media/ML Kit/FFmpeg; silhouette thin-stripe stripping and face-box masking verified on synthetic grids only; mouth-region delta and passersby penalty need on-device validation.
 - Status: Implemented - awaiting review.
 
+### 2026-10-28 (8) - OpenCode - Clamp silhouette region to valid grid indices
+
+- Scope: lib/core/services/face_detection_service.dart, test/auto_reframe_test.dart. RangeError crash introduced when silhouetteRegionX1 was set to 1.0.
+- Fix: x0/x1/y0/y1 in detectSilhouetteOrMotionSubject now clamped to 0..width-1 / 0..height-1, preventing gx=80 row-wrap and the resulting RangeError in ceiling-pillar removal that aborted whole-video analysis.
+- Silhouette activity block restructured to drop activity immediately to 0.004 when a visible face is actively speaking (0ms delay), instead of capping at 0.005.
+- Tests (auto_reframe_test.dart now 54 tests; full suite 412): added full-width grid regression test (ceiling + left/right borders) asserting no RangeError and normW < 0.5. All pass.
+- Checks run: flutter analyze --no-pub = No issues found; flutter test --no-pub = 412 passed.
+- Limitations: host-side only.
+- Status: Implemented - awaiting review.
+
 ### 2026-10-28 (7) - OpenCode - Masked-speaker tracking in wide shots and right-edge close-ups
 
 - Scope: lib/core/services/face_detection_service.dart, test/auto_reframe_test.dart. Two remaining bugs from frame-by-frame review.
